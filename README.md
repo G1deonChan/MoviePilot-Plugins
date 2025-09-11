@@ -1,7 +1,7 @@
 ### MoviePilot-Plugins 本仓库地址
 
 ```
-https://github.com/DecaChI/MoviePilot-Plugins/
+https://github.com/G1deonChan/MoviePilot-Plugins/
 ```
 
 - [ANi-Strm插件](./docs/anistrm.md)
