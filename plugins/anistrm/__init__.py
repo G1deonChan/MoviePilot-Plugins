@@ -56,13 +56,13 @@ class ANiStrm(_PluginBase):
     # 插件描述
     plugin_desc = "自动获取当季所有番剧，免去下载，轻松拥有一个番剧媒体库"
     # 插件图标
-    plugin_icon = "https://raw.githubusercontent.com/DecaChI/MoviePilot-Plugins/main/icons/anistrm.png"
+    plugin_icon = "https://raw.githubusercontent.com/G1deonChan/MoviePilot-Plugins/main/icons/anistrm.png"
     # 插件版本
     plugin_version = "2.4.3"
     # 插件作者
-    plugin_author = "DecaChI"
+    plugin_author = "G1deonChan"
     # 作者主页
-    author_url = "https://github.com/DecaChI"
+    author_url = "https://github.com/G1deonChan"
     # 插件配置项ID前缀
     plugin_config_prefix = "anistrm_"
     # 加载顺序
@@ -77,9 +77,6 @@ class ANiStrm(_PluginBase):
     _onlyonce = False
     _fulladd = False
     _storageplace = None
-    _proxy_url = "https://openani.an-i.workers.dev"
-    _custom_season = None
-    _get_custom_season = False  # 是否获取指定季度番剧（一次性操作）
 
     # 定时器
     _scheduler: Optional[BackgroundScheduler] = None
@@ -94,9 +91,6 @@ class ANiStrm(_PluginBase):
             self._onlyonce = config.get("onlyonce")
             self._fulladd = config.get("fulladd")
             self._storageplace = config.get("storageplace")
-            self._proxy_url = config.get("proxy_url") or "https://openani.an-i.workers.dev"
-            self._custom_season = config.get("custom_season")
-            self._get_custom_season = config.get("get_custom_season", False)
             # 加载模块
         if self._enabled or self._onlyonce:
             # 定时服务
@@ -126,32 +120,7 @@ class ANiStrm(_PluginBase):
                 self._scheduler.print_jobs()
                 self._scheduler.start()
 
-    def __validate_custom_season(self, season: str) -> bool:
-        """验证自定义季度格式是否正确"""
-        if not season:
-            return False
-        try:
-            # 检查格式是否为"年份-月份"
-            parts = season.split('-')
-            if len(parts) != 2:
-                return False
-            
-            year = int(parts[0])
-            month = int(parts[1])
-            # 验证月份是否为1、4、7、10中的一个（季度起始月）
-            return month in [1, 4, 7, 10] and year > 2000
-        except:
-            logger.error(f"自定义季度格式错误: {season}，应为'年份-月份'，如'2025-1'")
-            return False
-
     def __get_ani_season(self, idx_month: int = None) -> str:
-        # 如果启用了获取指定季度且指定季度有效，则使用指定季度
-        if self._get_custom_season and self._custom_season and self.__validate_custom_season(self._custom_season):
-            self._date = self._custom_season
-            logger.info(f"使用指定季度: {self._custom_season}")
-            return self._custom_season
-            
-        # 否则使用现有逻辑获取当前季度
         current_date = datetime.now()
         current_year = current_date.year
         current_month = idx_month if idx_month else current_date.month
@@ -162,38 +131,17 @@ class ANiStrm(_PluginBase):
 
     @retry(Exception, tries=3, logger=logger, ret=[])
     def get_current_season_list(self) -> List:
-        url = f'{self._proxy_url}/{self.__get_ani_season()}/'
-        logger.info(f"正在请求URL: {url}")
+        url = f'https://ani.v300.eu.org/{self.__get_ani_season()}/'
 
-        try:
-            # 先尝试GET方法
-            rep = RequestUtils(ua=settings.USER_AGENT if settings.USER_AGENT else None,
-                              proxies=settings.PROXY if settings.PROXY else None).get_res(url=url)
-            logger.debug(f"GET响应: {rep.status_code}")
-            logger.debug(f"响应内容: {rep.text}")
-            
-            if rep.status_code != 200:
-                # 如果GET失败，尝试POST方法
-                logger.info("GET请求失败，尝试POST请求")
-                rep = RequestUtils(ua=settings.USER_AGENT if settings.USER_AGENT else None,
-                                  proxies=settings.PROXY if settings.PROXY else None).post(url=url)
-                logger.debug(f"POST响应: {rep.status_code}")
-                logger.debug(f"响应内容: {rep.text}")
-
-            if rep.status_code != 200:
-                logger.error(f"请求失败，状态码: {rep.status_code}")
-                return []
-
-            files_json = rep.json().get('files', [])
-            logger.info(f"获取到 {len(files_json)} 个文件")
-            return [file['name'] for file in files_json]
-        except Exception as e:
-            logger.error(f"请求发生错误: {str(e)}")
-            raise
+        rep = RequestUtils(ua=settings.USER_AGENT if settings.USER_AGENT else None,
+                           proxies=settings.PROXY if settings.PROXY else None).post(url=url)
+        logger.debug(rep.text)
+        files_json = rep.json()['files']
+        return [file['name'] for file in files_json]
 
     @retry(Exception, tries=3, logger=logger, ret=[])
     def get_latest_list(self) -> List:
-        addr = 'https://api.ani.rip/ani-download.xml'
+        addr = 'https://aniapi.v300.eu.org/ani-download.xml'
         ret = RequestUtils(ua=settings.USER_AGENT if settings.USER_AGENT else None,
                            proxies=settings.PROXY if settings.PROXY else None).get_res(addr)
         ret_xml = ret.text
@@ -209,17 +157,24 @@ class ANiStrm(_PluginBase):
             # 链接
             link = DomUtils.tag_value(item, "link", default="")
             rss_info['title'] = title
-            # 获取不带http(s)://前缀的代理地址
-            proxy_domain = self._proxy_url.split('://')[-1]
-            rss_info['link'] = link.replace("resources.ani.rip", proxy_domain)
+            rss_info['link'] = link.replace("resources.ani.rip", "ani.v300.eu.org")
             ret_array.append(rss_info)
         return ret_array
 
     def __touch_strm_file(self, file_name, file_url: str = None) -> bool:
         if not file_url:
-            src_url = f'{self._proxy_url}/{self._date}/{file_name}?d=true'
+            # 季度API生成的URL，使用新格式
+            encoded_filename = quote(file_name, safe='')
+            src_url = f'https://ani.v300.eu.org/{self._date}/{encoded_filename}.mp4?d=true'
         else:
-            src_url = file_url
+            # 检查API获取的URL格式是否符合要求
+            if self._is_url_format_valid(file_url):
+                # 格式符合要求，直接使用
+                src_url = file_url
+            else:
+                # 格式不符合要求，进行转换
+                src_url = self._convert_url_format(file_url)
+        
         file_path = f'{self._storageplace}/{file_name}.strm'
         if os.path.exists(file_path):
             logger.debug(f'{file_name}.strm 文件已存在')
@@ -233,34 +188,39 @@ class ANiStrm(_PluginBase):
             logger.error('创建strm源文件失败：' + str(e))
             return False
 
+    def _is_url_format_valid(self, url: str) -> bool:
+        """检查URL格式是否符合要求（.mp4?d=true）"""
+        return url.endswith('.mp4?d=true')
+
+    def _convert_url_format(self, url: str) -> str:
+        """将URL转换为符合要求的格式"""
+        if '?d=mp4' in url:
+            # 将 ?d=mp4 替换为 .mp4?d=true
+            return url.replace('?d=mp4', '.mp4?d=true')
+        elif url.endswith('.mp4'):
+            # 如果已经以.mp4结尾，添加?d=true
+            return f'{url}?d=true'
+        else:
+            # 其他情况，添加.mp4?d=true
+            return f'{url}.mp4?d=true'
+
     def __task(self, fulladd: bool = False):
         cnt = 0
-        was_custom_season = self._get_custom_season  # 记录是否是获取指定季度的任务
-        
-        try:
-            # 增量添加更新
-            if not fulladd:
-                rss_info_list = self.get_latest_list()
-                logger.info(f'本次处理 {len(rss_info_list)} 个文件')
-                for rss_info in rss_info_list:
-                    if self.__touch_strm_file(file_name=rss_info['title'], file_url=rss_info['link']):
-                        cnt += 1
-            # 全量添加当季
-            else:
-                name_list = self.get_current_season_list()
-                logger.info(f'本次处理 {len(name_list)} 个文件')
-                for file_name in name_list:
-                    if self.__touch_strm_file(file_name=file_name):
-                        cnt += 1
-            logger.info(f'新创建了 {cnt} 个strm文件')
-        finally:
-            # 如果是获取指定季度的一次性任务，任务完成后重置相关配置
-            if was_custom_season:
-                logger.info("指定季度番剧获取完成，重置为获取当季番剧模式")
-                self._get_custom_season = False
-                # 可以选择是否清空自定义季度值，这里保留便于下次使用
-                # self._custom_season = ""
-                self.__update_config()
+        # 增量添加更新
+        if not fulladd:
+            rss_info_list = self.get_latest_list()
+            logger.info(f'本次处理 {len(rss_info_list)} 个文件')
+            for rss_info in rss_info_list:
+                if self.__touch_strm_file(file_name=rss_info['title'], file_url=rss_info['link']):
+                    cnt += 1
+        # 全量添加当季
+        else:
+            name_list = self.get_current_season_list()
+            logger.info(f'本次处理 {len(name_list)} 个文件')
+            for file_name in name_list:
+                if self.__touch_strm_file(file_name=file_name):
+                    cnt += 1
+        logger.info(f'新创建了 {cnt} 个strm文件')
 
     def get_state(self) -> bool:
         return self._enabled
@@ -369,62 +329,6 @@ class ANiStrm(_PluginBase):
                                         }
                                     }
                                 ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'proxy_url',
-                                            'label': '反代地址',
-                                            'placeholder': 'https://openani.an-i.workers.dev'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'get_custom_season',
-                                            'label': '获取指定季度番剧(一次性)',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'custom_season',
-                                            'label': '指定季度',
-                                            'placeholder': '格式:年份-月份，如2025-1',
-                                            'hint': '用于一次性获取指定季度番剧'
-                                        }
-                                    }
-                                ]
                             }
                         ]
                     },
@@ -454,7 +358,7 @@ class ANiStrm(_PluginBase):
                                             'type': 'info',
                                             'variant': 'tonal',
                                             'text': 'emby容器需要设置代理，docker的环境变量必须要有http_proxy代理变量，大小写敏感，具体见readme.' + '\n' +
-                                                    'https://github.com/DecaChI/MoviePilot-Plugins',
+                                                    'https://github.com/honue/MoviePilot-Plugins',
                                             'style': 'white-space: pre-line;'
                                         }
                                     }
@@ -470,9 +374,6 @@ class ANiStrm(_PluginBase):
             "fulladd": False,
             "storageplace": '/downloads/strm',
             "cron": "*/20 22,23,0,1 * * *",
-            "proxy_url": "https://openani.an-i.workers.dev",
-            "custom_season": "",
-            "get_custom_season": False,
         }
 
     def __update_config(self):
@@ -482,9 +383,6 @@ class ANiStrm(_PluginBase):
             "enabled": self._enabled,
             "fulladd": self._fulladd,
             "storageplace": self._storageplace,
-            "proxy_url": self._proxy_url,
-            "custom_season": self._custom_season,
-            "get_custom_season": self._get_custom_season,
         })
 
     def get_page(self) -> List[dict]:
@@ -506,15 +404,5 @@ class ANiStrm(_PluginBase):
 
 if __name__ == "__main__":
     anistrm = ANiStrm()
-    # 测试不同季度的访问
-    test_seasons = ["2024-1", "2024-4", "2025-1"]
-    for season in test_seasons:
-        print(f"\n测试季度: {season}")
-        anistrm._custom_season = season
-        anistrm._get_custom_season = True
-        try:
-            name_list = anistrm.get_current_season_list()
-            print(f"获取到 {len(name_list)} 个文件")
-            print(f"文件列表: {name_list[:5]}...")  # 只显示前5个文件
-        except Exception as e:
-            print(f"获取失败: {str(e)}")
+    name_list = anistrm.get_latest_list()
+    print(name_list)
