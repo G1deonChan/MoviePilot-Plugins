@@ -25,9 +25,8 @@ for sub in ("strmutil", "openlist", "treecache", "scanner", "tasks", "cleanup"):
     sys.modules[f"{PKG}.{sub}"] = mod
     spec.loader.exec_module(mod)
 
-from mp_plugin_openliststrm.cleanup import collect_broken, parse_strm_url  # noqa: E402
+from mp_plugin_openliststrm.cleanup import collect_broken, parse_strm_url, url_host  # noqa: E402
 from mp_plugin_openliststrm.openlist import OpenListClient  # noqa: E402
-from mp_plugin_openliststrm.scanner import parse_rules  # noqa: E402
 
 try:
     import requests
@@ -69,7 +68,8 @@ def main():
         content = f.read_text(encoding="utf-8", errors="replace")
         parsed = parse_strm_url(content)
         if parsed:
-            print(f"  {f.name:16} -> 前缀={parsed[0] or '(无)'}  路径={parsed[1]}")
+            host, prefix, remote = parsed          # (host, prefix, path)
+            print(f"  {f.name:16} -> host={host or '(相对路径)'}  前缀={prefix or '(无)'}  路径={remote}")
         else:
             print(f"  {f.name:16} -> 无法解析（非本插件内容，会被跳过）")
 
@@ -78,7 +78,8 @@ def main():
     rules = [ScanRule(remote_path="/Ani", local_dir=str(local_dir))]
 
     print("\n[检测结果]")
-    plan = collect_broken(rules, client=client, remote_existing=None, verify_remote=True)
+    plan = collect_broken(rules, client=client, remote_existing=None, verify_remote=True,
+                          expected_host=url_host(base))
     print(f"  扫描 strm：{plan.total_scanned}")
     print(f"  跳过无法解析：{plan.skipped_unparsable}")
     print(f"  判定失效：{plan.count}")

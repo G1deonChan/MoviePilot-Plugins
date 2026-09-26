@@ -15,15 +15,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Optional
-
 from .openlist import OpenListClient, OpenListError
 from .strmutil import (
     DEFAULT_DOWNLOAD_EXT,
+    DEFAULT_SKIP_DIRS,
+    DEFAULT_SKIP_FILES,
     DEFAULT_VIDEO_EXT,
     build_direct_url,
     classify_output,
+    compile_globs,
     join_remote_path,
     normalize_remote_path,
+    should_skip_dir,
+    should_skip_file,
     strm_target_path,
 )
 from .treecache import TreeCache
@@ -146,6 +150,9 @@ class ScanResult:
     videos_found: int = 0
     metas_found: int = 0
     skipped_by_rule: int = 0
+    # 被内置/自定义过滤器跳过的数量
+    skipped_dirs: int = 0
+    skipped_files: int = 0
     errors: list[str] = field(default_factory=list)
     cancelled: bool = False
     # 远端现存文件的绝对路径集合，供失效检测复用（避免二次遍历）
@@ -172,6 +179,8 @@ def scan(
     *,
     video_ext: Optional[list[str]] = None,
     download_ext: Optional[list[str]] = None,
+    skip_dirs: Optional[list[str]] = None,
+    skip_files: Optional[list[str]] = None,
     force: bool = False,
     should_cancel: Optional[Callable[[], bool]] = None,
     max_depth: int = 64,
@@ -183,6 +192,8 @@ def scan(
 
     :param video_ext:    纳入「生成 strm」的扩展名
     :param download_ext: 纳入「下载实体文件」的扩展名（字幕、元数据、图片等）
+    :param skip_dirs:    需要跳过的目录名（精确匹配，大小写不敏感）
+    :param skip_files:   需要跳过的文件名（支持 `*` `?` 通配）
     :param force:        True 时即使本地文件已存在也重新生成/下载
     :param max_depth:    递归深度保护，防止异常软链或指标环导致无限递归
     :param base_path:    账号的 base_path。OpenList 的 API 会自动拼接该前缀，
@@ -191,6 +202,9 @@ def scan(
     """
     videos = [e.lower() for e in (video_ext or DEFAULT_VIDEO_EXT)]
     downloads = [e.lower() for e in (download_ext or DEFAULT_DOWNLOAD_EXT)]
+    # 跳过规则：内置默认 + 用户追加，两者合并
+    dir_blacklist = list(DEFAULT_SKIP_DIRS) + list(skip_dirs or [])
+    file_patterns = compile_globs(list(DEFAULT_SKIP_FILES) + list(skip_files or []))
     result = ScanResult()
     base = normalize_remote_path(base_path or "/")
 
@@ -219,6 +233,8 @@ def scan(
                 max_depth=max_depth,
                 videos=videos,
                 downloads=downloads,
+                dir_blacklist=dir_blacklist,
+                file_patterns=file_patterns,
                 force=force,
                 result=result,
                 should_cancel=should_cancel,
@@ -265,6 +281,8 @@ def _walk(
     max_depth: int,
     videos: list[str],
     downloads: list[str],
+    dir_blacklist: list[str],
+    file_patterns: list["re.Pattern"],
     force: bool,
     result: ScanResult,
     should_cancel: Optional[Callable[[], bool]],
@@ -315,6 +333,10 @@ def _walk(
             if not rule.allows_dir(api_child):
                 result.skipped_by_rule += 1
                 continue
+            # 跳过垃圾目录（@eaDir、#recycle、.git 等），避免无谓递归
+            if should_skip_dir(name, dir_blacklist):
+                result.skipped_dirs += 1
+                continue
             # 记录子目录 mtime，供其缓存判新旧
             sub_dirs.append((api_child, url_child, str(entry.get("modified") or "")))
             continue
@@ -323,20 +345,28 @@ def _walk(
             result.skipped_by_rule += 1
             continue
 
+        # 跳过无关文件（广告、临时文件、系统残留等）
+        if should_skip_file(name, (), file_patterns):
+            result.skipped_files += 1
+            continue
+
         result.files_seen += 1
         result.remote_files.add(api_child)
 
         # 按扩展名决定处理方式：生成 strm / 下载实体文件 / 忽略
         action = classify_output(name, videos, downloads)
-        local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path)
 
         if action == "strm":
             result.videos_found += 1
+            # 视频 → 生成 <原名>.strm（必须带后缀，否则检测/清理功能找不到产物）
+            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path)
             content = build_direct_url(client.base_url, url_child)
             result.planned.append((local_path, content))
         elif action == "download":
-            # 字幕/元数据/图片等：记录 (本地路径, 远端路径)，由插件层实际下载
+            # 字幕/元数据/图片等：下载为**原名**的实体文件（不能加 .strm 后缀）
             result.metas_found += 1
+            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                          add_strm_suffix=False)
             result.downloads.append((local_path, api_child))
             try:
                 result.remote_sizes[api_child] = int(entry.get("size") or 0)
@@ -356,6 +386,8 @@ def _walk(
             max_depth=max_depth,
             videos=videos,
             downloads=downloads,
+            dir_blacklist=dir_blacklist,
+            file_patterns=file_patterns,
             force=force,
             result=result,
             should_cancel=should_cancel,

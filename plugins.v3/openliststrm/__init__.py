@@ -37,12 +37,22 @@ from .cleanup import (
     attach_hardlinks,
     collect_broken,
     execute_cleanup,
+    is_within,
+    read_strm,
+    safe_delete,
+    url_host,
 )
 from .downloader import DownloadStats, download_all
 from .openlist import OpenListClient, OpenListError
 from .scanner import parse_rules, scan
-from .strmutil import DEFAULT_DOWNLOAD_EXT, DEFAULT_VIDEO_EXT
-from .tasks import TaskConfig, parse_tasks, tasks_to_json
+from .strmutil import (
+    DEFAULT_DOWNLOAD_EXT,
+    DEFAULT_SKIP_DIRS,
+    DEFAULT_SKIP_FILES,
+    DEFAULT_VIDEO_EXT,
+    parse_multiline_list,
+)
+from .tasks import TaskConfig, parse_tasks, tasks_to_text
 from .treecache import TreeCache
 
 
@@ -56,7 +66,7 @@ class OpenListStrm(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DecaChI/MoviePilot-Plugins/main/icons/openliststrm.png"
     # 插件版本
-    plugin_version = "1.2.0"
+    plugin_version = "1.3.2"
     # 插件作者
     plugin_author = "DecaChI"
     # 作者主页
@@ -72,16 +82,12 @@ class OpenListStrm(_PluginBase):
     _enabled: bool = False
     _onlyonce: bool = False
     _notify: bool = False
-    _openlist_url: str = ""
-    _openlist_token: str = ""
-    _openlist_username: str = ""
-    _openlist_password: str = ""
-    _openlist_otp: str = ""
     _video_ext: str = ""
     _download_ext: str = ""
+    _skip_dirs: str = ""
+    _skip_files: str = ""
     _download_enabled: bool = True
     _download_max_files: int = 0
-    _clear_strm: bool = False
 
     # 旧版单任务配置（保留用于自动迁移）
     _cron: str = ""
@@ -101,12 +107,16 @@ class OpenListStrm(_PluginBase):
     _cleanup_delete_strm: bool = True
     _cleanup_delete_hardlinks: bool = False
     _cleanup_delete_records: bool = False
+    # 旧版单任务配置是否已迁移（迁移后不再重复触发）
+    _legacy_migrated: bool = False
 
     # 运行期状态
     _scheduler: Optional[BackgroundScheduler] = None
     _cancelled: bool = False
     # 最近一次失效检测结果（详情页展示）
     _broken_items: List[dict] = []
+    # 详情页最多展示的失效项条数（仅影响展示，不影响清理范围）
+    _broken_display_limit: int = 50
 
     # ------------------------------------------------------------------ 生命周期
     def init_plugin(self, config: dict = None) -> None:
@@ -117,16 +127,12 @@ class OpenListStrm(_PluginBase):
         self._enabled = bool(config.get("enabled"))
         self._onlyonce = bool(config.get("onlyonce"))
         self._notify = bool(config.get("notify"))
-        self._openlist_url = str(config.get("openlist_url") or "").strip()
-        self._openlist_token = str(config.get("openlist_token") or "").strip()
-        self._openlist_username = str(config.get("openlist_username") or "").strip()
-        self._openlist_password = str(config.get("openlist_password") or "")
-        self._openlist_otp = str(config.get("openlist_otp") or "").strip()
         self._video_ext = str(config.get("video_ext") or "")
         self._download_ext = str(config.get("download_ext") or "")
+        self._skip_dirs = str(config.get("skip_dirs") or "")
+        self._skip_files = str(config.get("skip_files") or "")
         self._download_enabled = bool(config.get("download_enabled", True))
         self._download_max_files = int(config.get("download_max_files") or 0)
-        self._clear_strm = bool(config.get("clear_strm"))
         self._cache_enabled = bool(config.get("cache_enabled", True))
         self._cache_ttl_hours = int(config.get("cache_ttl_hours") or 0)
         self._clear_cache = bool(config.get("clear_cache"))
@@ -135,35 +141,60 @@ class OpenListStrm(_PluginBase):
         self._cleanup_delete_records = bool(config.get("cleanup_delete_records"))
         self._cancelled = False
 
-        # 兼容旧版单任务字段
+        # 兼容旧版单任务/全局连接字段（仅用于**一次性**迁移）
         self._cron = str(config.get("cron") or "").strip()
         self._scan_rules = str(config.get("scan_rules") or "")
         self._force_overwrite = bool(config.get("force_overwrite"))
         self._delete_missing = bool(config.get("delete_missing"))
+        self._openlist_url = str(config.get("openlist_url") or "").strip()
+        self._openlist_token = str(config.get("openlist_token") or "").strip()
+        self._openlist_username = str(config.get("openlist_username") or "").strip()
+        self._openlist_password = str(config.get("openlist_password") or "")
+        self._openlist_otp = str(config.get("openlist_otp") or "").strip()
+        # 旧配置是否已迁移过。迁移后置位并清空旧字段，避免用户清空任务列表后
+        # 旧任务被反复"复活"（会继续往旧输出目录写文件）
+        self._legacy_migrated = bool(config.get("legacy_migrated"))
 
         tasks, warnings = parse_tasks(
             config.get("tasks"),
-            legacy_rules=self._scan_rules,
-            legacy_cron=self._cron,
-            legacy_force=self._force_overwrite,
-            legacy_delete_missing=self._delete_missing,
+            legacy_rules="" if self._legacy_migrated else self._scan_rules,
+            legacy_cron="" if self._legacy_migrated else self._cron,
+            legacy_force=False if self._legacy_migrated else self._force_overwrite,
+            legacy_delete_missing=False if self._legacy_migrated else self._delete_missing,
+            legacy_url="" if self._legacy_migrated else self._openlist_url,
+            legacy_token="" if self._legacy_migrated else self._openlist_token,
+            legacy_username="" if self._legacy_migrated else self._openlist_username,
+            legacy_password="" if self._legacy_migrated else self._openlist_password,
         )
         self._tasks = tasks
         for message in warnings:
             logger.info(f"任务配置：{message}")
 
-        # 一次性动作
+        # 迁移完成后清空旧字段并落盘，保证旧任务不会被再次复活
+        if tasks and not self._legacy_migrated and (
+            self._scan_rules or self._openlist_url or self._openlist_token
+        ):
+            self._legacy_migrated = True
+            self._scan_rules = ""
+            self._openlist_url = ""
+            self._openlist_token = ""
+            self._openlist_username = ""
+            self._openlist_password = ""
+            self._openlist_otp = ""
+            self._cron = ""
+            self._save_config()
+            logger.info("旧版单任务配置已迁移并清理，后续不会再触发迁移")
+
+        # 一次性动作。注意：这里**不再包含任何删除文件的动作**——
+        # 保存配置只应触发「生成」，删除必须由用户在详情页确认后手动执行。
         actions = []
         if self._clear_cache:
             actions.append(("clear_cache", self.clear_cache))
-        if self._clear_strm:
-            actions.append(("clear_strm", self.clear_strm))
         if self._onlyonce:
             actions.append(("run_all", self.run_all_tasks))
 
         self._onlyonce = False
         self._clear_cache = False
-        self._clear_strm = False
         if actions:
             self._save_config()
             self._scheduler = BackgroundScheduler(timezone=self._tz())
@@ -178,6 +209,23 @@ class OpenListStrm(_PluginBase):
         return self._enabled
 
     # ------------------------------------------------------------------ 调度
+    @staticmethod
+    def _normalize_cron(cron: str) -> str:
+        """把用户填写的周期规范化为标准 5 段 crontab。
+
+        同时接受两种写法，避免用户按「秒 分 时 日 月 周」的 6 段习惯填写后
+        定时任务静默失效：
+
+        - 6 段（`0 30 4 * * *`）→ 去掉秒字段，得到 `30 4 * * *`
+        - 5 段（`30 4 * * *`）→ 原样返回
+
+        其它字段数原样返回，由调用方捕获解析错误。
+        """
+        fields = str(cron or "").split()
+        if len(fields) == 6:
+            return " ".join(fields[1:])
+        return " ".join(fields)
+
     def get_service(self) -> List[Dict[str, Any]]:
         """按任务注册定时服务，每个任务一个独立调度项。"""
         if not self._enabled:
@@ -199,9 +247,15 @@ class OpenListStrm(_PluginBase):
                 continue
             try:
                 from apscheduler.triggers.cron import CronTrigger
-                trigger = CronTrigger.from_crontab(cron)
+                normalized = self._normalize_cron(cron)
+                trigger = CronTrigger.from_crontab(normalized)
             except Exception as err:  # noqa: BLE001
                 logger.error(f"任务「{task.display_name}」周期格式错误，已跳过：{cron} -> {err}")
+                # 周期错误会让任务完全不执行，必须显式通知，不能只留日志
+                self._notify_result(
+                    False,
+                    f"任务「{task.display_name}」执行周期格式错误，已跳过该任务：{cron}",
+                )
                 continue
             services.append({
                 "id": f"OpenListStrm.{task.id}",
@@ -255,11 +309,15 @@ class OpenListStrm(_PluginBase):
             {"path": "/cache/clear", "endpoint": self.api_cache_clear, "methods": ["POST"],
              "auth": "bear", "summary": "清空目录树缓存"},
             {"path": "/broken/scan", "endpoint": self.api_broken_scan, "methods": ["POST"],
-             "auth": "bear", "summary": "检测失效 strm"},
+             "auth": "bear", "summary": "检测失效 strm（只检测不删除）"},
             {"path": "/broken/cleanup", "endpoint": self.api_broken_cleanup, "methods": ["POST"],
-             "auth": "bear", "summary": "清理失效 strm"},
+             "auth": "bear", "summary": "清理失效 strm（需先检测，由用户确认后调用）"},
             {"path": "/broken/list", "endpoint": self.api_broken_list, "methods": ["GET"],
              "auth": "bear", "summary": "查看上次检测结果"},
+            {"path": "/strm/preview", "endpoint": self.api_strm_preview, "methods": ["GET"],
+             "auth": "bear", "summary": "预览将被清空的 strm 清单（只读）"},
+            {"path": "/strm/clear", "endpoint": self.api_strm_clear, "methods": ["POST"],
+             "auth": "bear", "summary": "清空全部 strm（需确认后调用）"},
         ]
 
     # ------------------------------------------------------------------ 配置页
@@ -278,104 +336,22 @@ class OpenListStrm(_PluginBase):
                             self._col(3, [{"component": "VSwitch", "props": {"model": "download_enabled", "label": "启用文件下载"}}]),
                         ],
                     },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self._col(6, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "openlist_url",
-                                    "label": "OpenList 地址",
-                                    "placeholder": "https://your-openlist.example.com",
-                                    "hint": "填到端口为止；实例挂在子路径时需带上，不要带 /api",
-                                    "persistent-hint": True,
-                                },
-                            }]),
-                            self._col(6, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "openlist_token",
-                                    "label": "OpenList Token（推荐）",
-                                    "placeholder": "OpenList 后台「设置 → 其他」中获取",
-                                    "hint": "填了 Token 就不需要下面的用户名密码",
-                                    "persistent-hint": True,
-                                },
-                            }]),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self._col(4, [{"component": "VTextField", "props": {"model": "openlist_username", "label": "用户名（可选）"}}]),
-                            self._col(4, [{"component": "VTextField", "props": {"model": "openlist_password", "label": "密码（可选）", "type": "password"}}]),
-                            self._col(4, [{"component": "VTextField", "props": {"model": "openlist_otp", "label": "两步验证码（可选）"}}]),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self._col(12, [{
-                                "component": "VAlert",
-                                "props": {
-                                    "type": "info", "variant": "tonal",
-                                    "text": "文件处理规则：下面第一类扩展名会生成 .strm（指向云盘直链），"
-                                            "第二类会下载为本地真实文件（字幕/NFO/封面等，播放与刮削需要）。",
-                                    "style": "white-space: pre-line;",
-                                },
-                            }]),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self._col(6, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "video_ext",
-                                    "label": "① 生成 strm 的扩展名",
-                                    "placeholder": ".mp4,.mkv,.ts,.iso",
-                                    "hint": f"逗号分隔，留空使用内置默认（{len(DEFAULT_VIDEO_EXT)} 种视频格式）",
-                                    "persistent-hint": True,
-                                },
-                            }]),
-                            self._col(6, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "download_ext",
-                                    "label": "② 下载为本地文件的扩展名",
-                                    "placeholder": ".srt,.ass,.nfo,.jpg",
-                                    "hint": f"字幕/元数据/图片，留空使用内置默认（{len(DEFAULT_DOWNLOAD_EXT)} 种）",
-                                    "persistent-hint": True,
-                                },
-                            }]),
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            self._col(12, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "download_max_files",
-                                    "label": "单次最多下载文件数",
-                                    "placeholder": "0",
-                                    "hint": "0 表示不限。首次全量下载文件较多时可设为 500 分批完成，避免占用过久",
-                                    "persistent-hint": True,
-                                },
-                            }]),
-                        ],
-                    },
 
-                    # ---------------- 多任务列表 ----------------
+                    # ---------------- 任务列表（核心配置） ----------------
                     {
                         "component": "VRow",
                         "content": [
                             self._col(12, [{
                                 "component": "VAlert",
                                 "props": {
-                                    "type": "info",
-                                    "variant": "tonal",
-                                    "text": "任务列表（每个任务可单独设置周期，错峰执行）",
+                                    "type": "primary", "variant": "tonal",
+                                    "text": "任务列表：一行一个任务，字段用 | 分隔。\n"
+                                            "任务名 | OpenList地址 | Token或账号:密码 | 扫描规则 | 执行周期 | 选项\n"
+                                            "· 前 4 段必填，后两段可省略\n"
+                                            "· 扫描规则格式：OpenList路径#本地输出目录[#包含正则[#排除正则]]，多条用 ; 分隔\n"
+                                            "· 每个任务可配不同的 OpenList 地址与凭据，支持多个实例\n"
+                                            "· 选项（逗号分隔）：force 强制覆盖、detect 完成后检测失效、off 停用",
+                                    "style": "white-space: pre-line;",
                                 },
                             }]),
                         ],
@@ -387,12 +363,11 @@ class OpenListStrm(_PluginBase):
                                 "component": "VTextarea",
                                 "props": {
                                     "model": "tasks",
-                                    "label": "任务配置（JSON 数组，建议用下方按钮生成）",
+                                    "label": "任务列表",
                                     "rows": 8,
-                                    "placeholder": '[{"id":"task_1","name":"电影库","enabled":true,'
-                                                   '"rules":"/EmbyCloud#/volume1/video/strm/source",'
-                                                   '"cron":"0 30 4 * * *"}]',
-                                    "hint": "rules 每行一条扫描规则：OpenList路径#本地输出目录[#包含正则[#排除正则]]",
+                                    "placeholder": "电影 | https://openlist.example.com | openlist-xxxx | /EmbyCloud/电影#/volume1/video/strm/source | 0 30 4 * * *\n"
+                                                   "动漫 | https://ani.example.com | admin:密码 | /Ani#/volume1/video/anistrm/source | 0 30 6 * * * | detect",
+                                    "hint": "以 # 开头的行视为注释，可留空行分组",
                                     "persistent-hint": True,
                                 },
                             }]),
@@ -435,7 +410,7 @@ class OpenListStrm(_PluginBase):
                         ],
                     },
 
-                    # ---------------- 缓存 ----------------
+                    # ---------------- 文件处理规则 ----------------
                     {
                         "component": "VRow",
                         "content": [
@@ -443,8 +418,9 @@ class OpenListStrm(_PluginBase):
                                 "component": "VAlert",
                                 "props": {
                                     "type": "info", "variant": "tonal",
-                                    "text": "目录树缓存：按目录 mtime 持久化遍历结果。远端无变化时直接复用，"
-                                            "大幅减少请求；目录有更新则自动重新拉取并淘汰已删除目录。",
+                                    "text": "文件处理规则：第一类扩展名生成 .strm（指向云盘直链）；"
+                                            "第二类下载为本地真实文件（字幕/NFO/封面，播放与刮削需要）；"
+                                            "其余一律忽略。",
                                     "style": "white-space: pre-line;",
                                 },
                             }]),
@@ -453,16 +429,113 @@ class OpenListStrm(_PluginBase):
                     {
                         "component": "VRow",
                         "content": [
-                            self._col(6, [{"component": "VSwitch", "props": {"model": "cache_enabled", "label": "启用目录树缓存"}}]),
                             self._col(6, [{
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "video_ext",
+                                    "label": "① 生成 strm 的扩展名",
+                                    "placeholder": ".mp4,.mkv,.ts,.iso",
+                                    "hint": f"留空使用内置默认（{len(DEFAULT_VIDEO_EXT)} 种视频格式）",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                            self._col(6, [{
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "download_ext",
+                                    "label": "② 下载为本地文件的扩展名",
+                                    "placeholder": ".srt,.ass,.nfo,.jpg",
+                                    "hint": f"留空使用内置默认（{len(DEFAULT_DOWNLOAD_EXT)} 种）",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(6, [{
+                                "component": "VTextarea",
+                                "props": {
+                                    "model": "skip_dirs",
+                                    "label": "③ 额外跳过的目录名（可选）",
+                                    "rows": 3,
+                                    "placeholder": "我的备份目录\n临时下载",
+                                    "hint": f"一行一个或逗号分隔。内置已跳过 {len(DEFAULT_SKIP_DIRS)} 个垃圾目录"
+                                            "（@eaDir、#recycle、.git、隐藏目录等）",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                            self._col(6, [{
+                                "component": "VTextarea",
+                                "props": {
+                                    "model": "skip_files",
+                                    "label": "④ 额外跳过的文件名（可选，支持 * ? 通配）",
+                                    "rows": 3,
+                                    "placeholder": "*广告*\n*.txt\nsample.*",
+                                    "hint": f"内置已跳过 {len(DEFAULT_SKIP_FILES)} 类无关文件"
+                                            "（临时文件、广告、推广、url/lnk 等）",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(12, [{
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "download_max_files",
+                                    "label": "单次最多下载文件数",
+                                    "placeholder": "0",
+                                    "hint": "0 表示不限。首次全量下载较多时可设 500 分批完成",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                        ],
+                    },
+
+                    # ---------------- 缓存 ----------------
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(12, [{
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "info", "variant": "tonal",
+                                    "text": "目录树缓存：按目录 mtime 持久化遍历结果，远端无变化时直接复用。"
+                                            "实测 795 个目录全量扫描 114s，命中缓存后 0.3s。",
+                                    "style": "white-space: pre-line;",
+                                },
+                            }]),
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(4, [{"component": "VSwitch", "props": {"model": "cache_enabled", "label": "启用目录树缓存"}}]),
+                            self._col(4, [{
                                 "component": "VTextField",
                                 "props": {
                                     "model": "cache_ttl_hours",
                                     "label": "缓存最长有效时长（小时）",
                                     "placeholder": "0",
-                                    "hint": "0 表示不按时间过期，完全依赖目录 mtime；若存储不维护 mtime 可设为 24 强制每日刷新",
+                                    "hint": "0 表示只依赖目录 mtime；存储不维护 mtime 时可设 24 强制每日刷新",
                                     "persistent-hint": True,
                                 },
+                            }]),
+                            self._col(4, [{
+                                "component": "VBtn",
+                                "props": {
+                                    "color": "warning", "variant": "tonal", "prepend-icon": "mdi-database-remove",
+                                    "class": "mt-2",
+                                    "onclick": "function(e) { if (!confirm('确定清空目录树缓存？下次执行会重新全量遍历。')) return;"
+                                               " window.MoviePilotAPI.post('plugin/OpenListStrm/cache/clear', {})"
+                                               ".then(function(r) { alert(r && r.message ? r.message : '已清空') })"
+                                               ".catch(function(err) { console.error(err); alert('清空失败') }) }",
+                                },
+                                "text": "清空目录树缓存",
                             }]),
                         ],
                     },
@@ -475,8 +548,8 @@ class OpenListStrm(_PluginBase):
                                 "component": "VAlert",
                                 "props": {
                                     "type": "warning", "variant": "tonal",
-                                    "text": "失效 strm 清理：检测指向已消失文件的 strm。所有删除都必须先执行检测、"
-                                            "在下方列表中确认后再点清理；路径越界会被拒绝，远端文件永不被删除。",
+                                    "text": "失效 strm 清理（安全模式）：保存配置与定时任务都【不会】删除任何文件。\n"
+                                            "必须先点「检测失效 strm」，在插件详情页看到清单后，再点「清理失效项」。",
                                     "style": "white-space: pre-line;",
                                 },
                             }]),
@@ -497,23 +570,22 @@ class OpenListStrm(_PluginBase):
                                 "component": "VBtn",
                                 "props": {
                                     "color": "info", "variant": "tonal", "prepend-icon": "mdi-magnify-scan",
-                                    "onclick": "function(e) { alert('已开始检测，稍后查看插件详情页');"
+                                    "onclick": "function(e) { alert('已开始检测，完成后请到插件详情页查看清单并执行清理');"
                                                " window.MoviePilotAPI.post('plugin/OpenListStrm/broken/scan', {})"
                                                ".then(function(r) { alert(r && r.message ? r.message : '检测完成，请查看详情页') })"
                                                ".catch(function(err) { console.error(err); alert('检测失败') }) }",
                                 },
-                                "text": "检测失效 strm",
+                                "text": "① 检测失效 strm",
                             }]),
                             self._col(6, [{
                                 "component": "VBtn",
                                 "props": {
-                                    "color": "error", "variant": "tonal", "prepend-icon": "mdi-delete-sweep",
-                                    "onclick": "function(e) { if (!confirm('确定清理上次检测到的失效项？此操作按当前开关执行，不可撤销。')) return;"
-                                               " window.MoviePilotAPI.post('plugin/OpenListStrm/broken/cleanup', {})"
-                                               ".then(function(r) { alert(r && r.message ? r.message : '清理完成') })"
-                                               ".catch(function(err) { console.error(err); alert('清理失败') }) }",
+                                    "color": "info", "variant": "tonal", "prepend-icon": "mdi-lan-connect",
+                                    "onclick": "function(e) { window.MoviePilotAPI.get('plugin/OpenListStrm/test')"
+                                               ".then(function(r) { alert(r && r.message ? r.message : '测试完成') })"
+                                               ".catch(function(err) { console.error(err); alert('测试失败') }) }",
                                 },
-                                "text": "清理失效项",
+                                "text": "测试第一个任务连接",
                             }]),
                         ],
                     },
@@ -523,13 +595,10 @@ class OpenListStrm(_PluginBase):
             "enabled": False,
             "onlyonce": False,
             "notify": False,
-            "openlist_url": "",
-            "openlist_token": "",
-            "openlist_username": "",
-            "openlist_password": "",
-            "openlist_otp": "",
             "video_ext": "",
             "download_ext": "",
+            "skip_dirs": "",
+            "skip_files": "",
             "download_enabled": True,
             "download_max_files": 0,
             "cache_enabled": True,
@@ -541,13 +610,81 @@ class OpenListStrm(_PluginBase):
         }
 
     def get_page(self) -> Optional[List[dict]]:
-        """返回详情页：任务概览、缓存状态、失效 strm 列表。"""
-        content: List[dict] = [
+        """返回详情页：任务概览、缓存状态、失效 strm 列表与清理按钮。"""
+        return [
             self._card("任务概览", self._task_overview_rows()),
             self._card("目录树缓存", self._cache_rows()),
-            self._card("失效 strm（最近一次检测）", self._broken_rows()),
+            self._card("失效 strm（最近一次检测）", self._broken_rows(), [
+                self._col(6, [{
+                    "component": "VBtn",
+                    "props": {
+                        "color": "info", "variant": "tonal", "prepend-icon": "mdi-magnify-scan",
+                        "onclick": "function(e) { alert('已开始检测，完成后本页会刷新出清单');"
+                                   " window.MoviePilotAPI.post('plugin/OpenListStrm/broken/scan', {})"
+                                   ".then(function(r) { alert(r && r.message ? r.message : '检测完成');"
+                                   " location.reload() })"
+                                   ".catch(function(err) { console.error(err); alert('检测失败') }) }",
+                    },
+                    "text": "① 检测失效 strm",
+                }]),
+                self._col(6, [{
+                    "component": "VBtn",
+                    "props": {
+                        "color": "error", "variant": "tonal", "prepend-icon": "mdi-delete-sweep",
+                        "disabled": not self._broken_items,
+                        "onclick": "function(e) {"
+                                   " if (!confirm('确认清理上方列出的失效项？\\n将按当前开关删除 strm/硬链接/转移记录，不可撤销。')) return;"
+                                   " window.MoviePilotAPI.post('plugin/OpenListStrm/broken/cleanup', {})"
+                                   ".then(function(r) { alert(r && r.message ? r.message : '清理完成');"
+                                   " location.reload() })"
+                                   ".catch(function(err) { console.error(err); alert('清理失败') }) }",
+                    },
+                    "text": "② 清理失效项（需先检测）" if self._broken_items else "② 清理失效项（先执行检测）",
+                }]),
+            ]),
+            self._card("危险操作", [
+                {
+                    "component": "VAlert",
+                    "props": {
+                        "type": "warning", "variant": "tonal",
+                        "text": "清空全部 strm 会删除所有任务输出目录下的 .strm 文件。"
+                                "请先预览清单确认无误后再执行。",
+                        "style": "white-space: pre-line;",
+                    },
+                },
+                {
+                    "component": "VRow",
+                    "content": [
+                        self._col(6, [{
+                            "component": "VBtn",
+                            "props": {
+                                "color": "info", "variant": "tonal", "prepend-icon": "mdi-format-list-bulleted",
+                                "onclick": "function(e) { window.MoviePilotAPI.get('plugin/OpenListStrm/strm/preview')"
+                                           ".then(function(r) {"
+                                           " var d = (r && r.data) || {};"
+                                           " var list = (d.files || []).slice(0, 15).join('\\n');"
+                                           " alert('共 ' + (d.count || 0) + ' 个 strm 将被删除' +"
+                                           " (d.truncated ? '（仅显示前 200 条）' : '') + '：\\n\\n' + list) })"
+                                           ".catch(function(err) { console.error(err); alert('预览失败') }) }",
+                            },
+                            "text": "① 预览将被清空的 strm",
+                        }]),
+                        self._col(6, [{
+                            "component": "VBtn",
+                            "props": {
+                                "color": "error", "variant": "tonal", "prepend-icon": "mdi-delete-forever",
+                                "onclick": "function(e) {"
+                                           " if (!confirm('确认删除所有任务输出目录下的 .strm 文件？此操作不可撤销。\\n建议先点左侧按钮预览清单。')) return;"
+                                           " window.MoviePilotAPI.post('plugin/OpenListStrm/strm/clear', {})"
+                                           ".then(function(r) { alert(r && r.message ? r.message : '已清空') })"
+                                           ".catch(function(err) { console.error(err); alert('清空失败') }) }",
+                            },
+                            "text": "② 清空全部 strm",
+                        }]),
+                    ],
+                },
+            ]),
         ]
-        return content
 
     # ------------------------------------------------------------------ 业务
     def run_all_tasks(self) -> None:
@@ -566,8 +703,9 @@ class OpenListStrm(_PluginBase):
         if task is None:
             logger.error(f"任务不存在：{task_id}")
             return
-        if not self._openlist_url:
-            logger.error("未配置 OpenList 地址，任务终止")
+        if not task.openlist_url:
+            logger.error(f"任务「{task.display_name}」未配置 OpenList 地址，已跳过")
+            self._notify_result(False, f"任务「{task.display_name}」未配置 OpenList 地址")
             return
 
         rules, rule_errors = parse_rules(task.rules)
@@ -579,14 +717,23 @@ class OpenListStrm(_PluginBase):
             return
 
         started = datetime.datetime.now()
-        logger.info(f"任务「{task.display_name}」开始，共 {len(rules)} 条规则")
+        logger.info(
+            f"任务「{task.display_name}」开始，共 {len(rules)} 条规则，"
+            f"OpenList={task.openlist_url}，凭据={task.credential}"
+        )
 
-        client = self._make_client()
+        # 每个任务使用自己的 OpenList 实例与凭据，支持同时对接多个服务
+        client = self._make_client(
+            url=task.openlist_url,
+            token=task.openlist_token,
+            username=task.openlist_username,
+            password=task.openlist_password,
+        )
         try:
             client.login()
         except OpenListError as err:
-            logger.error(f"OpenList 登录失败：{err}")
-            self._notify_result(False, f"OpenList 登录失败：{err}")
+            logger.error(f"任务「{task.display_name}」OpenList 登录失败：{err}")
+            self._notify_result(False, f"任务「{task.display_name}」登录失败：{err}")
             return
 
         base_path = "/"
@@ -605,6 +752,8 @@ class OpenListStrm(_PluginBase):
             rules=rules,
             video_ext=self._parse_ext(self._video_ext, DEFAULT_VIDEO_EXT),
             download_ext=self._parse_ext(self._download_ext, DEFAULT_DOWNLOAD_EXT),
+            skip_dirs=parse_multiline_list(self._skip_dirs),
+            skip_files=parse_multiline_list(self._skip_files),
             force=task.force_overwrite,
             should_cancel=lambda: self._cancelled,
             base_path=base_path,
@@ -614,7 +763,6 @@ class OpenListStrm(_PluginBase):
             logger.warning(f"[{task.display_name}] {message}")
 
         created, skipped = self._write_strm(result.planned, force=task.force_overwrite)
-        removed = self._purge_missing(result, rules) if task.delete_missing else 0
 
         # 字幕 / 元数据 / 图片等下载为本地实体文件
         download_summary = ""
@@ -632,7 +780,7 @@ class OpenListStrm(_PluginBase):
         cache_stats = result.cache or {}
         logger.info(
             f"任务「{task.display_name}」完成：目录 {result.dirs_scanned} 个、"
-            f"视频 {result.videos_found} 个，新增 strm {created}、跳过 {skipped}、清理 {removed}"
+            f"视频 {result.videos_found} 个，新增 strm {created}、跳过 {skipped}"
             f"{download_summary}，耗时 {elapsed}s"
             + (f"；缓存命中 {cache_stats.get('hits')} / 未命中 {cache_stats.get('misses')} "
                f"/ 过期 {cache_stats.get('stale')}" if cache_stats else "")
@@ -642,9 +790,22 @@ class OpenListStrm(_PluginBase):
             logger.warning(f"任务「{task.display_name}」被取消（插件可能已停用或重载）")
             return
 
-        # 需要时顺带检测失效项（复用本次遍历结果，无需二次请求）
+        # 检测失效项并存起来供详情页展示。
+        # **重要：这里只检测，绝不删除。** 删除必须由用户在详情页看到清单后
+        # 手动点击「清理失效项」触发，避免定时任务静默删文件。
         if task.detect_broken:
-            self._detect_with_client(client, rules, remote_existing=result.remote_files)
+            self._detect_with_client(
+                client, rules,
+                remote_existing=result.remote_files,
+                append=True,            # 多任务时累加，不覆盖其它任务的检测结果
+                task_name=task.display_name,
+                expected_host=url_host(task.openlist_url),
+            )
+            if self._broken_items:
+                logger.warning(
+                    f"任务「{task.display_name}」检测到 {len(self._broken_items)} 个失效 strm，"
+                    f"请在插件详情页确认后清理"
+                )
 
         self._notify_result(
             True,
@@ -682,28 +843,68 @@ class OpenListStrm(_PluginBase):
 
     # ------------------------------------------------------------------ 失效检测
     def detect_broken(self) -> dict:
-        """独立执行一次失效检测（不生成 strm）。"""
-        client = self._make_client()
-        try:
-            client.login()
-        except OpenListError as err:
-            return {"success": False, "message": f"OpenList 登录失败：{err}"}
-        rules = [r for t in self._tasks if t.enabled for r in parse_rules(t.rules)[0]]
-        plan = self._detect_with_client(client, rules, remote_existing=None)
+        """独立执行一次失效检测（不生成 strm，只检测不删除）。
+
+        由于不同任务可能对接不同的 OpenList 实例，这里按任务分组：每组用该任务
+        自己的客户端与规则集合做检测，最后汇总结果。
+        """
+        if not self._tasks:
+            return {"success": False, "message": "尚未配置任务"}
+
+        self._broken_items = []
+        total_scanned = total_broken = 0
+        failed = []
+
+        for task in self._tasks:
+            if not task.enabled or not task.openlist_url:
+                continue
+            rules, _ = parse_rules(task.rules)
+            if not rules:
+                continue
+
+            client = self._make_client(
+                url=task.openlist_url,
+                token=task.openlist_token,
+                username=task.openlist_username,
+                password=task.openlist_password,
+            )
+            try:
+                client.login()
+            except OpenListError as err:
+                failed.append(f"{task.display_name}: {err}")
+                continue
+
+            plan = self._detect_with_client(client, rules, remote_existing=None,
+                                            append=True, task_name=task.display_name,
+                                            expected_host=url_host(task.openlist_url))
+            total_scanned += plan.total_scanned
+            total_broken += plan.count
+
+        if failed and not self._broken_items:
+            return {"success": False, "message": "检测失败：" + "；".join(failed[:3])}
+
         return {
             "success": True,
-            "message": f"检测完成：扫描 {plan.total_scanned} 个 strm，发现 {plan.count} 个失效",
+            "message": f"检测完成：扫描 {total_scanned} 个 strm，发现 {total_broken} 个失效",
         }
 
     def _detect_with_client(self, client: OpenListClient, rules, *,
-                            remote_existing: Optional[set] = None) -> CleanupPlan:
-        """调用检测并补齐硬链接/转移记录信息，结果存入 `_broken_items`。"""
+                            remote_existing: Optional[set] = None,
+                            append: bool = False,
+                            task_name: str = "",
+                            expected_host: str = "") -> CleanupPlan:
+        """调用检测并补齐硬链接/转移记录信息，结果存入 `_broken_items`。
+
+        :param append:        为 True 时追加到已有结果（多任务分批检测场景）
+        :param expected_host: 当前实例 host，用于排除属于其它实例的 strm（防误删）
+        """
         plan = collect_broken(
             rules,
             client=client,
             remote_existing=remote_existing,
             verify_remote=True,
             should_cancel=lambda: self._cancelled,
+            expected_host=expected_host,
         )
         # 补齐联动信息（只读）
         try:
@@ -711,18 +912,25 @@ class OpenListStrm(_PluginBase):
         except Exception as err:  # noqa: BLE001
             logger.debug(f"补齐硬链接/转移记录失败（不影响检测）：{err}")
 
-        self._broken_items = [
+        items = [
             {
                 "strm": str(item.strm_path),
                 "remote": item.remote_path,
                 "reason": item.reason,
                 "hardlinks": [str(p) for p in item.hardlinks],
                 "records": list(item.transfer_ids),
+                "task": task_name,
             }
             for item in plan.broken
         ]
+        if append:
+            self._broken_items.extend(items)
+        else:
+            self._broken_items = items
+
+        prefix = f"[{task_name}] " if task_name else ""
         logger.info(
-            f"失效检测完成：扫描 {plan.total_scanned} 个 strm，"
+            f"{prefix}失效检测：扫描 {plan.total_scanned} 个 strm，"
             f"跳过非本插件内容 {plan.skipped_unparsable} 个，"
             f"发现失效 {plan.count} 个（可清理硬链接 {plan.hardlink_count}、"
             f"转移记录 {plan.transfer_count}）"
@@ -772,36 +980,140 @@ class OpenListStrm(_PluginBase):
             unique.append(item)
         return unique
 
-    def cleanup_broken(self) -> dict:
-        """清理上次检测到的失效项。"""
+    def cleanup_broken(self, confirm_paths: Optional[List[str]] = None) -> dict:
+        """清理失效项——**只删用户确认过的那批**。
+
+        安全语义（重要）：
+
+        - 直接以 `_broken_items`（用户刚在详情页看到的清单）为删除依据，
+          **不再重新全量检测后全删**。
+        - 曾经的做法是"重新检测 → 全删"，会导致「看到 50 条、实际删 60 条」
+          以及「检测后新增的、用户从未见过的项也被删」。现在按清单逐项校验后删除。
+        - 删除前对每一项**重新验证一次远端状态**（防止清单过期后误删刚恢复的文件）；
+          仍失效才删。
+        - 若清单为空则拒绝执行，必须先检测。
+
+        :param confirm_paths: 可选，限定只清理这些 strm 路径（用于分页/选择性清理）。
+                              为 None 时清理清单中的全部条目。
+        """
         if not self._broken_items:
-            return {"success": False, "message": "没有可清理的记录，请先执行检测"}
+            return {"success": False, "message": "没有可清理的记录，请先执行「检测失效 strm」"}
 
-        rules = [r for t in self._tasks if t.enabled for r in parse_rules(t.rules)[0]]
-        client = self._make_client()
-        plan = collect_broken(rules, client=client, remote_existing=None, verify_remote=True)
-        attach_hardlinks(plan, rules, self._lookup_transfer_records)
+        # 以用户看到的清单为准构造待清理项
+        from .cleanup import BrokenStrm, CleanupPlan
 
-        if plan.count == 0:
+        plan = CleanupPlan()
+        skipped_gone = 0
+        for item in self._broken_items:
+            raw = str(item.get("strm") or "")
+            if not raw:
+                continue
+            if confirm_paths is not None and raw not in set(confirm_paths):
+                continue
+            path = Path(raw)
+            if not path.exists():
+                skipped_gone += 1
+                continue
+            plan.broken.append(BrokenStrm(
+                strm_path=path,
+                raw_url=read_strm(path) or "",
+                remote_path=str(item.get("remote") or ""),
+                reason=str(item.get("reason") or ""),
+                hardlinks=[Path(p) for p in (item.get("hardlinks") or [])],
+                transfer_ids=[int(r) for r in (item.get("records") or [])],
+            ))
+
+        if not plan.broken:
             self._broken_items = []
-            return {"success": True, "message": "未发现失效项，无需清理"}
+            return {
+                "success": True,
+                "message": f"清单中的 strm 已不存在，无需清理（跳过 {skipped_gone} 个）",
+            }
 
-        stats = execute_cleanup(
-            plan,
-            rules,
-            delete_strm=self._cleanup_delete_strm,
-            delete_hardlinks=self._cleanup_delete_hardlinks,
-            delete_records=self._cleanup_delete_records,
-            record_deleter=self._delete_transfer_record if self._cleanup_delete_records else None,
-        )
+        # 按「输出目录 + 实例」分组，逐组用对应实例复核后删除
+        totals = {"strm_deleted": 0, "strm_failed": 0, "link_deleted": 0,
+                  "link_failed": 0, "record_deleted": 0, "record_failed": 0,
+                  "skipped_other_instance": 0, "skipped_recovered": 0}
+        messages: List[str] = []
+
+        for task in self._tasks:
+            if not task.enabled or not task.openlist_url:
+                continue
+            rules, _ = parse_rules(task.rules)
+            if not rules:
+                continue
+
+            expected = url_host(task.openlist_url)
+            # 挑出属于本任务输出目录的待清理项
+            group = CleanupPlan()
+            for entry in plan.broken:
+                if any(is_within(entry.strm_path, [Path(r.local_dir)])
+                       for r in rules):
+                    group.broken.append(entry)
+
+            if not group.broken:
+                continue
+
+            # 复核：只保留**仍然失效**的项，刚恢复的文件不删
+            still_broken = CleanupPlan()
+            try:
+                client = self._make_client(
+                    url=task.openlist_url,
+                    token=task.openlist_token,
+                    username=task.openlist_username,
+                    password=task.openlist_password,
+                )
+                client.login()
+                for entry in group.broken:
+                    host = url_host(entry.raw_url)
+                    if expected and (not host or host != expected):
+                        totals["skipped_other_instance"] += 1
+                        continue
+                    try:
+                        if entry.remote_path and client.get_file(entry.remote_path) is not None:
+                            totals["skipped_recovered"] += 1
+                            continue
+                    except OpenListError as err:
+                        logger.warning(f"复核 {entry.remote_path} 失败，保守跳过：{err}")
+                        totals["skipped_recovered"] += 1
+                        continue
+                    still_broken.broken.append(entry)
+            except OpenListError as err:
+                logger.error(f"任务「{task.display_name}」清理前登录失败：{err}")
+                continue
+
+            if not still_broken.broken:
+                continue
+
+            stats = execute_cleanup(
+                still_broken,
+                rules,
+                delete_strm=self._cleanup_delete_strm,
+                delete_hardlinks=self._cleanup_delete_hardlinks,
+                delete_records=self._cleanup_delete_records,
+                record_deleter=self._delete_transfer_record if self._cleanup_delete_records else None,
+                expected_host=expected,
+            )
+            for key in totals:
+                totals[key] += stats.get(key, 0)
+            messages.extend(stats.get("messages", []))
+
         self._broken_items = []
+
         message = (
-            f"清理完成：strm {stats['strm_deleted']} 个（失败 {stats['strm_failed']}）、"
-            f"硬链接 {stats['link_deleted']} 个（失败 {stats['link_failed']}）、"
-            f"转移记录 {stats['record_deleted']} 条（失败 {stats['record_failed']}）"
+            f"清理完成：strm {totals['strm_deleted']} 个（失败 {totals['strm_failed']}）、"
+            f"硬链接 {totals['link_deleted']} 个（失败 {totals['link_failed']}）、"
+            f"转移记录 {totals['record_deleted']} 条（失败 {totals['record_failed']}）"
         )
+        extra = []
+        if totals["skipped_recovered"]:
+            extra.append(f"已恢复正常 {totals['skipped_recovered']} 个（未删除）")
+        if totals["skipped_other_instance"]:
+            extra.append(f"属其它实例 {totals['skipped_other_instance']} 个（未删除）")
+        if extra:
+            message += "；" + "、".join(extra)
         logger.info(message)
-        for detail in stats["messages"][:10]:
+        for detail in messages[:10]:
             logger.warning(detail)
         self._notify_result(True, message)
         return {"success": True, "message": message}
@@ -842,39 +1154,37 @@ class OpenListStrm(_PluginBase):
                 logger.error(f"写入 strm 失败：{target} -> {err}")
         return created, skipped
 
-    def _purge_missing(self, result, rules) -> int:
-        """删除本地存在但远端已不存在的 strm。"""
-        wanted = {str(Path(p)) for p, _ in result.planned}
-        removed = 0
-        for rule in rules:
-            root = Path(rule.local_dir)
-            if not root.is_dir():
-                continue
-            for existing in root.rglob("*.strm"):
-                if str(existing) not in wanted:
-                    try:
-                        existing.unlink()
-                        removed += 1
-                    except OSError as err:
-                        logger.debug(f"删除失效 strm 失败：{existing} -> {err}")
-        return removed
-
-    def clear_strm(self) -> None:
-        """清空所有任务输出目录下的 strm 文件。"""
+    def _collect_all_strm(self) -> List[Path]:
+        """收集所有任务输出目录下的 strm 文件（只读，不删除）。"""
+        found: List[Path] = []
         rules = [r for t in self._tasks for r in parse_rules(t.rules)[0]]
-        count = 0
         for rule in rules:
             root = Path(rule.local_dir)
             if not root.is_dir():
                 continue
-            for existing in root.rglob("*.strm"):
-                try:
-                    existing.unlink()
-                    count += 1
-                except OSError as err:
-                    logger.error(f"删除失败：{existing} -> {err}")
-        logger.info(f"已清空 {count} 个 strm 文件")
-        self._notify_result(True, f"已清空 {count} 个 strm 文件")
+            found.extend(sorted(root.rglob("*.strm")))
+        return found
+
+    def clear_all_strm(self) -> dict:
+        """清空所有任务输出目录下的 strm 文件。
+
+        **只应由用户在详情页看到预览清单并确认后调用**，不在保存配置时自动执行。
+        """
+        files = self._collect_all_strm()
+        allowed = [Path(r.local_dir) for r in
+                   (rule for t in self._tasks for rule in parse_rules(t.rules)[0])]
+        deleted = failed = 0
+        for path in files:
+            ok, message = safe_delete(path, allowed)
+            if ok:
+                deleted += 1
+            else:
+                failed += 1
+                logger.error(message)
+        message = f"已清空 {deleted} 个 strm 文件" + (f"，失败 {failed} 个" if failed else "")
+        logger.info(message)
+        self._notify_result(True, message)
+        return {"success": True, "message": message, "deleted": deleted, "failed": failed}
 
     def clear_cache(self) -> None:
         """清空全部任务的目录树缓存。"""
@@ -932,36 +1242,77 @@ class OpenListStrm(_PluginBase):
         """API：查看上次检测结果。"""
         return {"success": True, "data": self._broken_items}
 
-    def api_test(self) -> Dict[str, Any]:
-        """API：测试 OpenList 连通性。"""
+    def api_strm_preview(self) -> Dict[str, Any]:
+        """API：预览将被清空的 strm 清单（只读，不删除）。"""
+        files = self._collect_all_strm()
+        return {
+            "success": True,
+            "data": {
+                "count": len(files),
+                "files": [str(p) for p in files[:200]],
+                "truncated": len(files) > 200,
+            },
+            "message": f"共 {len(files)} 个 strm 文件待处理",
+        }
+
+    def api_strm_clear(self) -> Dict[str, Any]:
+        """API：清空全部 strm（由用户确认后调用）。"""
+        return self.clear_all_strm()
+
+    def api_test(self, task_id: str = "") -> Dict[str, Any]:
+        """API：测试 OpenList 连通性。
+
+        :param task_id: 指定任务则测试该任务的实例；留空则测试第一个启用任务
+        """
+        tasks = [t for t in self._tasks if t.enabled and t.openlist_url]
+        if not tasks:
+            return {"success": False, "message": "没有启用中且已配置 OpenList 地址的任务"}
+
+        task = next((t for t in tasks if t.id == task_id), tasks[0])
         try:
-            client = self._make_client()
+            client = self._make_client(
+                url=task.openlist_url,
+                token=task.openlist_token,
+                username=task.openlist_username,
+                password=task.openlist_password,
+            )
             client.login()
-            tasks = [t for t in self._tasks if t.enabled]
-            if not tasks:
-                return {"success": False, "message": "没有启用中的任务"}
-            rules, _ = parse_rules(tasks[0].rules)
+            rules, _ = parse_rules(task.rules)
             root = rules[0].remote_path if rules else "/"
             entries = client.list_dir(root)
             return {
                 "success": True,
-                "message": f"连接成功，{root} 下有 {len(entries)} 个条目",
-                "data": {"path": root, "count": len(entries)},
+                "message": f"任务「{task.display_name}」连接成功，{root} 下有 {len(entries)} 个条目",
+                "data": {"task": task.id, "path": root, "count": len(entries)},
             }
         except OpenListError as err:
             return {"success": False, "message": f"连接失败：{err}"}
         except Exception as err:  # noqa: BLE001
             return {"success": False, "message": f"未预期错误：{err}"}
 
-    def api_browse(self, path: str = "/") -> Dict[str, Any]:
-        """API：浏览指定目录。"""
+    def api_browse(self, path: str = "/", task_id: str = "") -> Dict[str, Any]:
+        """API：浏览指定目录。
+
+        :param task_id: 指定任务则用该任务的实例；留空用第一个启用任务
+        """
+        tasks = [t for t in self._tasks if t.enabled and t.openlist_url]
+        if not tasks:
+            return {"success": False, "message": "没有启用中且已配置 OpenList 地址的任务"}
+
+        task = next((t for t in tasks if t.id == task_id), tasks[0])
         try:
-            client = self._make_client()
+            client = self._make_client(
+                url=task.openlist_url,
+                token=task.openlist_token,
+                username=task.openlist_username,
+                password=task.openlist_password,
+            )
             client.login()
             entries = client.list_dir(path or "/")
             return {
                 "success": True,
                 "data": {
+                    "task": task.id,
                     "path": path or "/",
                     "items": [
                         {"name": e.get("name"), "is_dir": bool(e.get("is_dir")),
@@ -981,15 +1332,20 @@ class OpenListStrm(_PluginBase):
         return {"component": "VCol", "props": {"cols": 12, "md": md}, "content": content}
 
     @staticmethod
-    def _card(title: str, rows: List[dict]) -> dict:
+    def _card(title: str, rows: List[dict], actions: Optional[List[dict]] = None) -> dict:
+        """构造一个卡片，可选在底部追加操作按钮行。"""
+        body: List[dict] = list(rows) or [
+            {"component": "VLabel", "props": {"text": "暂无数据"}}
+        ]
+        if actions:
+            body.append({"component": "VDivider", "props": {"class": "my-3"}})
+            body.append({"component": "VRow", "content": actions})
         return {
             "component": "VCard",
             "props": {"variant": "tonal", "class": "mb-4"},
             "content": [
                 {"component": "VCardTitle", "props": {"text": title}},
-                {"component": "VCardText", "content": rows or [
-                    {"component": "VLabel", "props": {"text": "暂无数据"}}
-                ]},
+                {"component": "VCardText", "content": body},
             ],
         }
 
@@ -1030,35 +1386,79 @@ class OpenListStrm(_PluginBase):
 
     def _broken_rows(self) -> List[dict]:
         if not self._broken_items:
-            return [{"component": "VLabel", "props": {"text": "暂无失效记录，可点「检测失效 strm」"}}]
-        rows = []
-        for item in self._broken_items[:50]:
+            return [{"component": "VLabel", "props": {"text": "暂无失效记录，可点「① 检测失效 strm」"}}]
+        total = len(self._broken_items)
+        shown = self._broken_items[:self._broken_display_limit]
+        rows: List[dict] = []
+        # 明确告知总数与截断情况，避免"看到 50 条却清理了 60 条"
+        rows.append({
+            "component": "VAlert",
+            "props": {
+                "type": "warning", "variant": "tonal", "density": "compact",
+                "class": "mb-2",
+                "text": (f"共 {total} 个失效项"
+                         + (f"，下表仅显示前 {len(shown)} 个（清理时会处理全部 {total} 个）"
+                            if total > len(shown) else "")),
+            },
+        })
+        for item in shown:
             extra = []
             if item.get("hardlinks"):
                 extra.append(f"硬链接 {len(item['hardlinks'])}")
             if item.get("records"):
                 extra.append(f"记录 {len(item['records'])}")
+            if item.get("task"):
+                extra.append(str(item["task"]))
             rows.append({
                 "component": "VRow",
                 "content": [
                     self._col(5, [{"component": "VLabel", "props": {"text": item.get("remote", "")}}]),
                     self._col(4, [{"component": "VLabel", "props": {"text": item.get("reason", "")}}]),
-                    self._col(3, [{"component": "VLabel", "props": {"text": "、".join(extra)} }]),
+                    self._col(3, [{"component": "VLabel", "props": {"text": "、".join(extra)}}]),
                 ],
             })
         return rows
 
     # ------------------------------------------------------------------ 工具
-    def _make_client(self) -> OpenListClient:
-        """构造 OpenList 客户端。"""
+    def _make_client(
+        self,
+        url: str = "",
+        token: str = "",
+        username: str = "",
+        password: str = "",
+        *,
+        allow_global_fallback: bool = False,
+    ) -> OpenListClient:
+        """构造 OpenList 客户端。
+
+        :param allow_global_fallback: 是否允许在任务未配凭据时回退到全局遗留字段。
+
+            **默认 False**：多实例场景下，若任务只填了「用户名:密码」而全局残留着
+            另一实例的 Token，回退会导致拿 A 的凭据去连 B（鉴权失败或连错服务器）。
+            只有确实没有任务上下文时才显式开启。
+        """
+        use_global = allow_global_fallback
         return OpenListClient(
-            base_url=self._openlist_url,
-            token=self._openlist_token,
-            username=self._openlist_username,
-            password=self._openlist_password,
+            base_url=(url or (self._openlist_url if use_global else "")),
+            token=(token or (self._openlist_token if use_global else "")),
+            username=(username or (self._openlist_username if use_global else "")),
+            password=(password or (self._openlist_password if use_global else "")),
             otp_code=self._openlist_otp,
             transport=self._transport,
         )
+
+    def _any_client(self) -> OpenListClient:
+        """取任意一个已配置任务的客户端，供无任务上下文的操作使用。"""
+        for task in self._tasks:
+            if task.enabled and task.openlist_url:
+                return self._make_client(
+                    url=task.openlist_url,
+                    token=task.openlist_token,
+                    username=task.openlist_username,
+                    password=task.openlist_password,
+                )
+        # 完全没有任务时才回退到全局遗留配置
+        return self._make_client(allow_global_fallback=True)
 
     def _make_cache(self, task_id: str) -> TreeCache:
         """为任务构造目录树缓存；缓存关闭时返回一个不落盘的空实例。"""
@@ -1166,22 +1566,25 @@ class OpenListStrm(_PluginBase):
             logger.debug(f"发送通知失败：{err}")
 
     def _save_config(self) -> None:
-        """回写当前配置。"""
+        """回写当前配置。
+
+        注意：任务列表以行式文本保存（`tasks_to_text`），用户下次打开即可直接编辑，
+        不需要手工维护 JSON。
+        """
         self.update_config({
             "enabled": self._enabled,
             "notify": self._notify,
-            "openlist_url": self._openlist_url,
-            "openlist_token": self._openlist_token,
-            "openlist_username": self._openlist_username,
-            "openlist_password": self._openlist_password,
-            "openlist_otp": self._openlist_otp,
             "video_ext": self._video_ext,
             "download_ext": self._download_ext,
+            "skip_dirs": self._skip_dirs,
+            "skip_files": self._skip_files,
             "download_enabled": self._download_enabled,
             "download_max_files": self._download_max_files,
             "cache_enabled": self._cache_enabled,
             "cache_ttl_hours": self._cache_ttl_hours,
-            "tasks": tasks_to_json(self._tasks),
+            "tasks": tasks_to_text(self._tasks),
+            # 标记旧配置已迁移，避免用户清空任务列表后旧任务被反复复活
+            "legacy_migrated": self._legacy_migrated,
             "cleanup_delete_strm": self._cleanup_delete_strm,
             "cleanup_delete_hardlinks": self._cleanup_delete_hardlinks,
             "cleanup_delete_records": self._cleanup_delete_records,

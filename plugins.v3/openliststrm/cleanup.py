@@ -38,8 +38,10 @@ from .scanner import ScanRule
 from .strmutil import normalize_remote_path
 
 # strm 内容形如 https://host/d/<encoded path>（可能带 ?sign=... 查询串）
+# host 单独捕获：多实例场景必须用它判断该 strm 属于哪个 OpenList
 _ABSOLUTE_URL_RE = re.compile(
-    r"^https?://[^/\s]+(?P<prefix>(?:/[^/\s?]*)*)?/d/(?P<path>[^?\s]+)", re.IGNORECASE
+    r"^https?://(?P<host>[^/\s]+)(?P<prefix>(?:/[^/\s?]*)*)?/d/(?P<path>[^?\s]+)",
+    re.IGNORECASE,
 )
 _RELATIVE_URL_RE = re.compile(
     r"^/?(?P<prefix>(?:[^/\s?]+/)*?)d/(?P<path>[^?\s]+)$", re.IGNORECASE
@@ -76,6 +78,8 @@ class CleanupPlan:
     broken: list[BrokenStrm] = field(default_factory=list)
     total_scanned: int = 0
     skipped_unparsable: int = 0
+    # 属于其它 OpenList 实例、因而不参与本实例校验的 strm 数量
+    skipped_other_instance: int = 0
     errors: list[str] = field(default_factory=list)
     cancelled: bool = False
 
@@ -93,15 +97,16 @@ class CleanupPlan:
 
 
 # --------------------------------------------------------------------- 解析
-def parse_strm_url(content: str) -> Optional[tuple[str, str]]:
-    """从 strm 内容反解出 (站点路径前缀, OpenList 路径)。
+def parse_strm_url(content: str) -> Optional[tuple[str, str, str]]:
+    """从 strm 内容反解出 (host, 站点路径前缀, OpenList 路径)。
 
     兼容：
     - 绝对 URL：`https://host/d/<path>`、`https://host/openlist/d/<path>`
-    - 相对路径：`/d/<path>`、`d/<path>`
+    - 相对路径：`/d/<path>`、`d/<path>`（此时 host 为空串）
 
-    返回的第一项是 `/d/` 之前的路径前缀（实例挂子路径时非空，通常为空），
-    第二项是解码后的 OpenList 路径（始终以 `/` 开头）。
+    返回的 host 形如 `host:port`（小写，不含协议）；相对路径时为空串。
+    **host 必须保留**：多实例场景下，只有同一实例才能校验该 strm 指向的文件，
+    用别的实例去查会得到 `object not found`，从而把有效 strm 误判为失效。
     """
     text = str(content or "").strip()
     if not text:
@@ -111,8 +116,10 @@ def parse_strm_url(content: str) -> Optional[tuple[str, str]]:
     if not text:
         return None
 
+    host = ""
     match = _ABSOLUTE_URL_RE.match(text)
     if match:
+        host = (match.group("host") or "").lower()
         prefix = match.group("prefix") or ""
         raw_path = match.group("path")
     else:
@@ -126,7 +133,16 @@ def parse_strm_url(content: str) -> Optional[tuple[str, str]]:
     segments = [urllib.parse.unquote(seg) for seg in raw_path.split("/") if seg]
     if not segments:
         return None
-    return (prefix.rstrip("/"), normalize_remote_path("/" + "/".join(segments)))
+    return (host, prefix.rstrip("/"), normalize_remote_path("/" + "/".join(segments)))
+
+
+def url_host(url: str) -> str:
+    """提取 URL 的 host（含端口，小写），用于跨实例比对。"""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    parsed = urllib.parse.urlsplit(text if "://" in text else f"http://{text}")
+    return (parsed.netloc or "").lower()
 
 
 def read_strm(path: Path) -> Optional[str]:
@@ -199,6 +215,7 @@ def collect_broken(
     verify_remote: bool = True,
     max_verify: int = 3000,
     should_cancel: Optional[Callable[[], bool]] = None,
+    expected_host: str = "",
 ) -> CleanupPlan:
     """收集失效的 strm。
 
@@ -206,9 +223,16 @@ def collect_broken(
                             直接对每个本地 strm 做 API 校验。
     :param verify_remote:   是否对粗筛结果调用 API 精查（防止集合不完整导致误判）
     :param max_verify:      精查数量上限，避免超大库拖慢任务
+    :param expected_host:   当前 OpenList 实例的 host。
+
+        **关键安全约束**：只校验 host 与之一致的 strm。多个任务共用同一输出目录
+        且各连不同实例时，用错误的实例去查他实例的文件必然得到 `object not found`，
+        会把**有效 strm 误判为失效并删除**。因此 host 不匹配的一律跳过（不纳入候选）。
+        空字符串表示不做 host 校验（单实例/无 client 场景）。
     """
     plan = CleanupPlan()
     existing = {normalize_remote_path(p) for p in (remote_existing or set())}
+    expected = (expected_host or "").lower()
     verified = 0
 
     for rule in rules:
@@ -229,7 +253,17 @@ def collect_broken(
                 plan.skipped_unparsable += 1
                 continue
 
-            _, remote_path = parsed
+            host, _, remote_path = parsed
+
+            # 跨实例防护：只处理属于当前实例的 strm。
+            # 相对路径形式（host 为空）无法判断归属，保守跳过。
+            if expected:
+                if not host:
+                    plan.skipped_other_instance += 1
+                    continue
+                if host != expected:
+                    plan.skipped_other_instance += 1
+                    continue
 
             if remote_existing is not None and remote_path in existing:
                 continue        # 远端仍在，无需处理
@@ -302,11 +336,15 @@ def execute_cleanup(
     delete_hardlinks: bool = False,
     delete_records: bool = False,
     record_deleter: Optional[Callable[[int], bool]] = None,
+    expected_host: str = "",
 ) -> dict:
     """执行清理，返回逐项结果统计。
 
     默认只删 strm 本体；硬链接与转移记录需显式开启。
     所有被删路径都会再次做边界校验。
+
+    :param expected_host: 当前实例 host。非空时，**只删除属于该实例的 strm**，
+                          作为跨实例误删的第二道防线。
     """
     allowed: list[Path] = [Path(r.local_dir) for r in rules if r.local_dir]
     # 硬链接位于媒体库目录，加入其所在父目录作为允许范围
@@ -314,14 +352,23 @@ def execute_cleanup(
         for link in item.hardlinks:
             allowed.append(link.parent)
 
+    expected = (expected_host or "").lower()
     stats = {
         "strm_deleted": 0, "strm_failed": 0,
         "link_deleted": 0, "link_failed": 0,
         "record_deleted": 0, "record_failed": 0,
+        "skipped_other_instance": 0,
         "messages": [],
     }
 
     for item in plan.broken:
+        # 第二道防线：host 不匹配则整项跳过（不删 strm、不删硬链接、不删记录）
+        if expected:
+            host = url_host(item.raw_url)
+            if not host or host != expected:
+                stats["skipped_other_instance"] += 1
+                continue
+
         if delete_hardlinks:
             for link in item.hardlinks:
                 ok, message = safe_delete(link, allowed)

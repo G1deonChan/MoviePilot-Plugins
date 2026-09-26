@@ -13,7 +13,6 @@
 import importlib.util
 import sys
 import types
-import urllib.parse
 from pathlib import Path
 
 PLUGIN_ID = "openliststrm"

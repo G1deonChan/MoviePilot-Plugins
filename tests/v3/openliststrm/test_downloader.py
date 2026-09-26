@@ -43,9 +43,116 @@ from mp_plugin_openliststrm.downloader import (  # noqa: E402
 )
 from mp_plugin_openliststrm.strmutil import (  # noqa: E402
     DEFAULT_DOWNLOAD_EXT,
+    DEFAULT_SKIP_DIRS,
+    DEFAULT_SKIP_FILES,
     DEFAULT_VIDEO_EXT,
     classify_output,
+    compile_globs,
+    parse_multiline_list,
+    should_skip_dir,
+    should_skip_file,
 )
+
+
+# ===================================================================== 无关文件过滤
+class TestShouldSkipDir:
+    @pytest.mark.parametrize("name", [
+        "@eaDir", "@tmp", "#recycle", "$RECYCLE.BIN", "lost+found",
+        ".git", ".stfolder", ".Trash-1000", "System Volume Information",
+    ])
+    def test_builtin_junk_dirs_skipped(self, name):
+        assert should_skip_dir(name, DEFAULT_SKIP_DIRS)
+
+    def test_hidden_dir_skipped(self):
+        assert should_skip_dir(".hidden", DEFAULT_SKIP_DIRS)
+
+    def test_case_insensitive(self):
+        assert should_skip_dir("@EADIR", DEFAULT_SKIP_DIRS)
+        assert should_skip_dir("recycle", ["recycle"])
+
+    @pytest.mark.parametrize("name", ["电影", "Ani", "Season 01", "2019-1"])
+    def test_normal_dirs_kept(self, name):
+        assert not should_skip_dir(name, DEFAULT_SKIP_DIRS)
+
+    def test_empty_skipped(self):
+        assert should_skip_dir("", DEFAULT_SKIP_DIRS)
+
+    def test_user_extra_patterns(self):
+        patterns = compile_globs(["*备份*", "temp*"])
+        assert should_skip_dir("我的备份目录", DEFAULT_SKIP_DIRS, patterns)
+        assert should_skip_dir("tempdir", DEFAULT_SKIP_DIRS, patterns)
+        assert not should_skip_dir("电影", DEFAULT_SKIP_DIRS, patterns)
+
+
+class TestShouldSkipFile:
+    @pytest.mark.parametrize("name", [
+        "Thumbs.db", "desktop.ini", ".DS_Store",
+        "movie.tmp", "movie.part", "x.crdownload", "y.!qb", "z.aria2",
+        "快捷方式.url", "广告.jpg", "最新地址.txt", "page.html",
+    ])
+    def test_builtin_junk_files_skipped(self, name):
+        patterns = compile_globs(DEFAULT_SKIP_FILES)
+        assert should_skip_file(name, (), patterns)
+
+    @pytest.mark.parametrize("name", ["movie.mkv", "sub.srt", "poster.jpg", "tvshow.nfo"])
+    def test_media_files_kept(self, name):
+        patterns = compile_globs(DEFAULT_SKIP_FILES)
+        assert not should_skip_file(name, (), patterns)
+
+    def test_plain_txt_not_in_default_skip_list(self):
+        """普通 txt 不在默认跳过表内——它会在分类阶段被自然忽略，无需额外过滤。"""
+        patterns = compile_globs(DEFAULT_SKIP_FILES)
+        assert not should_skip_file("readme.txt", (), patterns)
+        assert classify_output("readme.txt", DEFAULT_VIDEO_EXT, DEFAULT_DOWNLOAD_EXT) == "skip"
+
+    def test_user_extra_patterns(self):
+        patterns = compile_globs(DEFAULT_SKIP_FILES + ["sample.*", "*.exe"])
+        assert should_skip_file("Sample.mkv", (), patterns)
+        assert should_skip_file("tool.exe", (), patterns)
+        assert not should_skip_file("movie.mkv", (), patterns)
+
+    def test_exact_name_match(self):
+        assert should_skip_file("custom.dat", ["custom.dat"])
+        assert not should_skip_file("other.dat", ["custom.dat"])
+
+    def test_question_mark_wildcard(self):
+        patterns = compile_globs(["file?.txt"])
+        assert should_skip_file("file1.txt", (), patterns)
+        assert not should_skip_file("file12.txt", (), patterns)
+
+
+class TestParseMultilineList:
+    def test_one_per_line(self):
+        assert parse_multiline_list("a\nb\nc") == ["a", "b", "c"]
+
+    def test_comma_separated(self):
+        assert parse_multiline_list("a,b,c") == ["a", "b", "c"]
+
+    def test_mixed(self):
+        assert parse_multiline_list("a,b\nc") == ["a", "b", "c"]
+
+    def test_chinese_comma(self):
+        assert parse_multiline_list("a，b") == ["a", "b"]
+
+    def test_comments_and_blanks_ignored(self):
+        assert parse_multiline_list("# 注释\n\na\n") == ["a"]
+
+    def test_empty(self):
+        assert parse_multiline_list("") == []
+        assert parse_multiline_list(None) == []
+
+
+class TestCompileGlobs:
+    def test_valid_patterns(self):
+        assert len(compile_globs(["*.txt", "a?c"])) == 2
+
+    def test_empty_and_blank_skipped(self):
+        assert compile_globs(["", "  ", None]) == []
+
+    def test_case_insensitive_matching(self):
+        patterns = compile_globs(["*.TXT"])
+        assert patterns[0].match("readme.txt")
+        assert patterns[0].match("README.TXT")
 
 
 # ===================================================================== 文件分类

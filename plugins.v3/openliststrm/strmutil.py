@@ -7,10 +7,12 @@
 
 from __future__ import annotations
 
+import fnmatch
 import posixpath
+import re
 import urllib.parse
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 # 默认纳入的视频扩展名（小写，含点）→ 生成 .strm。可在插件配置中覆盖。
 DEFAULT_VIDEO_EXT = [
@@ -21,17 +23,45 @@ DEFAULT_VIDEO_EXT = [
 
 # 默认纳入的「下载」扩展名（字幕、元数据、图片等）→ 实际下载到本地。
 # 这些文件体积小，且媒体服务器刮削/播放时需要真实文件在本地。
+# 注意：不包含 .txt / .html 等纯文本——它们通常是说明或广告，没有媒体库价值。
 DEFAULT_DOWNLOAD_EXT = [
     # 字幕
     ".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi", ".ttml",
     # 元数据
-    ".nfo", ".xml", ".txt", ".json",
+    ".nfo", ".xml",
     # 图片
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tbn",
 ]
 
 # 向后兼容别名：旧配置/旧测试使用 DEFAULT_META_EXT 表示「附属文件」
 DEFAULT_META_EXT = DEFAULT_DOWNLOAD_EXT
+
+# 生成的 strm 文件后缀。产物是文本文件，必须带该后缀才能被
+# `rglob("*.strm")` 系列的检测/清理功能识别。
+STRM_SUFFIX = ".strm"
+
+# 默认跳过的垃圾目录名（各种网盘/系统/下载器产生的元数据目录）。
+# 这些目录里的内容永远不需要生成 strm 或下载。
+DEFAULT_SKIP_DIRS = [
+    "@eadir", "@tmp", "@recycle", "#recycle", "#snapshot",
+    "$recycle.bin", "system volume information", "lost+found",
+    ".git", ".svn", ".stfolder", ".recycle", ".trash", ".trash-1000",
+    ".thumbnails", ".cache", ".sync", "node_modules",
+    "__macosx", ".ds_store",
+]
+
+# 默认跳过的垃圾文件名（大小写不敏感；支持 `*` 通配）。
+# 覆盖系统残留、下载器临时文件、广告/推广文件等。
+DEFAULT_SKIP_FILES = [
+    "thumbs.db", "desktop.ini", ".ds_store", "ehthumbs.db",
+    "*.tmp", "*.temp", "*.part", "*.partial", "*.crdownload",
+    "*.!qb", "*.!ut", "*.downloading", "*.aria2", "*.bc!",
+    "*.url", "*.lnk", "*.db", "*.ini", "*.log", "*.bak",
+    "*.torrent", "*.nfo.bak",
+    # 常见广告/推广/说明文件
+    "*广告*", "*推广*", "*最新地址*", "*获取方式*", "*更多资源*",
+    "*请勿*", "*必看*", "*公告*", "*.html", "*.htm",
+]
 
 
 def normalize_remote_path(path: str) -> str:
@@ -92,11 +122,23 @@ def is_meta_file(name: str, meta_ext: Iterable[str]) -> bool:
     return ext in {str(e).lower() for e in meta_ext}
 
 
-def strm_target_path(root_dir: str, remote_path: str, remote_root: str = "/") -> str:
-    """把远端文件路径映射为本地 strm 输出相对路径。
+def strm_target_path(
+    root_dir: str,
+    remote_path: str,
+    remote_root: str = "/",
+    *,
+    add_strm_suffix: bool = True,
+) -> str:
+    """把远端文件路径映射为本地 strm 输出路径。
 
     - `remote_root`：远端扫描起点（如 `/EmbyCloud`），会从输出中剥离，避免本地多出
       一层与挂载点同名的目录。
+    - `add_strm_suffix`：是否把文件名改为 `<原名>.strm`。
+
+      **必须为 True**（默认）：产物是文本文件，文件名带 `.strm` 后缀才能被
+      「失效检测」「预览清空」「清空全部」等按 `rglob("*.strm")` 查找的功能识别，
+      也符合 Emby/同类插件（如 anistrm）的惯例。视频文件 `a.mkv` 会生成 `a.mkv.strm`。
+
     - 返回值使用 POSIX 分隔符，调用方再用 `Path` 拼接，保证跨平台一致。
     """
     remote = normalize_remote_path(remote_path)
@@ -110,6 +152,12 @@ def strm_target_path(root_dir: str, remote_path: str, remote_root: str = "/") ->
 
     if not relative:
         relative = posixpath.basename(remote)
+    if add_strm_suffix:
+        # 总是追加 .strm，**不做「已带后缀就不加」的守卫**。
+        # 若加了该守卫，远端同目录下的 a.mkv 与 a.mkv.strm 会映射到同一个
+        # a.mkv.strm，两条计划塌缩成一个文件（后写覆盖前写，静默丢内容）。
+        # 追加则分别得到 a.mkv.strm 与 a.mkv.strm.strm，互不冲突。
+        relative = f"{relative}{STRM_SUFFIX}"
     return f"{base}/{relative}" if base else relative
 
 
@@ -181,6 +229,76 @@ def classify_output(
     if ext in {str(e).lower() for e in download_ext}:
         return "download"
     return "skip"
+
+
+def compile_globs(patterns: Iterable[str]) -> list[re.Pattern]:
+    """把通配符模式编译成正则（大小写不敏感）。
+
+    支持 `*`（任意字符）与 `?`（单字符）。非法模式会被跳过。
+    """
+    compiled: list[re.Pattern] = []
+    for raw in patterns or []:
+        pattern = str(raw or "").strip()
+        if not pattern:
+            continue
+        try:
+            compiled.append(re.compile(fnmatch.translate(pattern), re.IGNORECASE))
+        except Exception:  # noqa: BLE001 - 单个模式异常不应影响其它
+            continue
+    return compiled
+
+def should_skip_dir(
+    name: str,
+    skip_dirs: Iterable[str],
+    extra_patterns: Optional[Iterable[re.Pattern]] = None,
+) -> bool:
+    """判断目录是否属于应跳过的垃圾目录。"""
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered in {str(d).strip().lower() for d in (skip_dirs or [])}:
+        return True
+    # 隐藏目录（以 . 开头）一律跳过，避免把 .git / .stfolder 等纳入扫描
+    if lowered.startswith("."):
+        return True
+    for pattern in (extra_patterns or []):
+        if pattern.match(lowered):
+            return True
+    return False
+
+
+def should_skip_file(
+    name: str,
+    skip_files: Iterable[str],
+    extra_patterns: Optional[Iterable[re.Pattern]] = None,
+) -> bool:
+    """判断文件是否属于应跳过的无关文件（广告、临时文件、系统残留等）。"""
+    lowered = str(name or "").strip().lower()
+    if not lowered:
+        return True
+    if lowered in {str(f).strip().lower() for f in (skip_files or [])}:
+        return True
+    for pattern in (extra_patterns or []):
+        if pattern.match(lowered):
+            return True
+    return False
+
+
+def parse_multiline_list(text: str) -> list[str]:
+    """解析多行/逗号分隔的列表文本，忽略空行与 `#` 注释行。
+
+    让「跳过目录」「跳过文件」既能一行一个，也能逗号分隔。
+    """
+    items: list[str] = []
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        for part in line.replace("，", ",").split(","):
+            item = part.strip()
+            if item:
+                items.append(item)
+    return items
 
 
 def relative_display_path(root_dir: str, target: str) -> str:

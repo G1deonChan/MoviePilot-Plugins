@@ -7,7 +7,6 @@
 """
 
 import importlib.util
-import json
 import sys
 import time
 import types
