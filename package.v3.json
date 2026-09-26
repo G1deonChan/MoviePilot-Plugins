@@ -1,0 +1,17 @@
+{
+  "OpenListStrm": {
+    "name": "OpenList Strm",
+    "description": "无需挂载，直接读取 OpenList 目录树生成 strm 文件（字幕/NFO 等下载为本地文件），交由 MoviePilot 刮削入库。",
+    "labels": "云盘,工具",
+    "version": "1.2.0",
+    "icon": "https://raw.githubusercontent.com/DecaChI/MoviePilot-Plugins/main/icons/openliststrm.png",
+    "author": "DecaChI",
+    "level": 2,
+    "release": true,
+    "system_version": ">=3.0.0",
+    "history": {
+      "v1.2.0": "新增目录树持久化缓存、多任务独立定时、失效 strm 检测与联动清理；视频生成 strm，字幕/NFO/封面自动下载为本地文件。",
+      "v1.0.0": "首次发布：通过 OpenList HTTP API 递归遍历目录树并生成 strm，无需 WebDAV 或本地挂载。支持多规则扫描、包含/排除正则、定时任务、手动触发、强制覆盖与失效清理。"
+    }
+  }
+}
