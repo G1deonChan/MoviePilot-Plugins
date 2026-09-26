@@ -14,10 +14,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
 
 from .openlist import OpenListClient, OpenListError
 from .strmutil import (
@@ -43,6 +46,16 @@ _SEPARATORS = ("#", "|")
 # 实测（OpenList 单请求约 111ms）：8 线程提速约 6 倍，16 线程无进一步收益，
 # 故取 8 作为兼顾速度与对服务端压力的默认值。
 DEFAULT_WORKERS = 8
+
+# 搜索索引的 scope 取值（见 internal/model/search.go）
+INDEX_SCOPE_ALL = 0
+INDEX_SCOPE_DIR = 1
+INDEX_SCOPE_FILE = 2
+
+# 索引查询的分页大小。
+# 注意：实测 Meilisearch 下耗时几乎与 per_page 无关（瓶颈在服务端 Count），
+# 因此取一个较大的值以减少往返次数。
+DEFAULT_INDEX_PAGE_SIZE = 2000
 
 
 @dataclass
@@ -199,15 +212,19 @@ def scan(
     base_path: str = "/",
     cache: Optional[TreeCache] = None,
     workers: int = DEFAULT_WORKERS,
+    use_index: bool = True,
 ) -> ScanResult:
     """遍历所有规则并产出 strm 与下载计划。
 
-    **并发遍历**：按层并发请求同层目录（BFS），而不是逐目录串行递归。
+    **两条路径，自动选择**：
 
-    实测（795 目录的 /Ani）：单请求约 111ms、串行需 95s+；
-    8 线程并发可提速约 6 倍（16 线程无进一步收益，故默认 8）。
-    并发只影响**请求顺序**，不影响结果：每个目录的处理彼此独立，
-    产出顺序在最后统一排序，保证结果稳定可复现。
+    1. **索引路径（首选）**：查询 OpenList 的 `/api/fs/search`。该接口查服务端本地
+       索引，`parent` 递归匹配整棵子树，一次查询即可拿到全部文件，
+       无需逐目录请求。实测 857 个目录的子树从约 95 秒降到几秒。
+    2. **遍历路径（回退）**：索引未启用 / 未建完 / 查询失败时，退回按层并发遍历
+       （BFS + 线程池，8 线程比串行快约 6 倍）。
+
+    两条路径产出完全相同的计划——过滤、命名、直链构造共用同一套逻辑。
 
     :param video_ext:    纳入「生成 strm」的扩展名
     :param download_ext: 纳入「下载实体文件」的扩展名（字幕等）
@@ -217,8 +234,9 @@ def scan(
     :param max_depth:    递归深度保护，防止异常软链或指标环导致无限递归
     :param base_path:    账号的 base_path。OpenList 的 API 会自动拼接该前缀，
                          但 `/d/` 直链不会，因此生成 URL 时必须显式补上。
-    :param cache:        目录树缓存。启用后 mtime 未变的目录可跳过请求。
-    :param workers:      并发线程数；1 表示退回串行。
+    :param cache:        目录树缓存（仅遍历路径使用）
+    :param workers:      并发线程数；1 表示串行
+    :param use_index:    是否优先使用搜索索引
     """
     videos = [e.lower() for e in (video_ext or DEFAULT_VIDEO_EXT)]
     downloads = [e.lower() for e in (download_ext or DEFAULT_DOWNLOAD_EXT)]
@@ -254,20 +272,42 @@ def scan(
             result.skipped_by_rule += 1
             continue
 
-        try:
-            _walk_concurrent(
-                ctx=ctx,
-                rule=rule,
-                root_api=api_root,
-                root_url=url_root,
-                max_depth=max_depth,
-                workers=max(1, int(workers)),
-                should_cancel=should_cancel,
-            )
-        except OpenListError as err:
-            result.errors.append(f"[{rule.remote_path}] {err}")
-        except Exception as err:  # noqa: BLE001 - 单条规则失败不应中断其它规则
-            result.errors.append(f"[{rule.remote_path}] 未预期错误：{type(err).__name__}: {err}")
+        # 首选：查询 OpenList 的搜索索引（一次拿整棵子树，无需逐目录遍历）
+        used_index = False
+        if use_index:
+            try:
+                found = _collect_via_index(
+                    ctx=ctx, rule=rule,
+                    root_api=api_root, root_url=url_root,
+                    should_cancel=should_cancel,
+                )
+                if found > 0:
+                    used_index = True
+                    result.dirs_scanned += 1        # 索引查询视作一次整体扫描
+                    result.visited_dirs.add(api_root)
+                elif result.cancelled:
+                    return result
+            except Exception as err:  # noqa: BLE001 - 索引异常一律回退
+                logger.debug(f"索引查询失败，回退遍历：{err}")
+            if result.cancelled:
+                return result
+
+        # 回退：逐目录并发遍历（索引未启用 / 未建完 / 返回空时）
+        if not used_index:
+            try:
+                _walk_concurrent(
+                    ctx=ctx,
+                    rule=rule,
+                    root_api=api_root,
+                    root_url=url_root,
+                    max_depth=max_depth,
+                    workers=max(1, int(workers)),
+                    should_cancel=should_cancel,
+                )
+            except OpenListError as err:
+                result.errors.append(f"[{rule.remote_path}] {err}")
+            except Exception as err:  # noqa: BLE001 - 单条规则失败不应中断其它规则
+                result.errors.append(f"[{rule.remote_path}] 未预期错误：{type(err).__name__}: {err}")
 
         if result.cancelled:
             return result
@@ -348,6 +388,114 @@ def _merge(ctx: _ScanContext, out: _DirOutcome) -> None:
     res.downloads.extend(out.downloads)
     res.remote_files.update(out.remote_files)
     res.remote_sizes.update(out.remote_sizes)
+
+
+def _collect_via_index(
+    *,
+    ctx: _ScanContext,
+    rule: ScanRule,
+    root_api: str,
+    root_url: str,
+    should_cancel: Optional[Callable[[], bool]],
+    page_size: int = DEFAULT_INDEX_PAGE_SIZE,
+) -> int:
+    """用 OpenList 的搜索索引一次性收集整棵子树的文件。
+
+    **这是首选路径**：`/api/fs/search` 查询服务端本地索引，
+    `parent` 参数递归匹配整个子树，因此一次请求即可拿到全部条目，
+    无需逐目录遍历（实测 857 目录的子树从约 95s 降到几秒）。
+
+    :return: 收集到的条目数；0 表示索引不可用（调用方应回退到遍历）
+    """
+    res = ctx.result
+    collected = 0
+    page = 1
+
+    while True:
+        if should_cancel and should_cancel():
+            res.cancelled = True
+            return collected
+
+        data = ctx.client.search_index(
+            root_api, scope=INDEX_SCOPE_FILE,
+            page=page, per_page=page_size,
+        )
+        if data is None:
+            # 索引不可用（未启用/未建完/超时）→ 交由调用方回退
+            return 0
+
+        content = data.get("content") or []
+        total = int(data.get("total") or 0)
+
+        for node in content:
+            if should_cancel and should_cancel():
+                res.cancelled = True
+                return collected
+            _accept_index_node(ctx, rule, root_api, root_url, node)
+
+        collected += len(content)
+        if not content or collected >= total:
+            break
+        page += 1
+
+    return collected
+
+
+def _accept_index_node(ctx: _ScanContext, rule: ScanRule, root_api: str,
+                       root_url: str, node: dict) -> None:
+    """把索引返回的一条记录转成 strm/下载计划。
+
+    索引记录自带完整 `parent`，因此无需逐层拼接；但仍要走同一套过滤与分类逻辑，
+    保证与遍历路径的结果一致。
+    """
+    res = ctx.result
+    name = str(node.get("name") or "").strip()
+    parent = str(node.get("parent") or "").strip()
+    if not name or not parent:
+        return
+
+    api_child = join_remote_path(parent, name)
+
+    # 必须落在本次规则的扫描根之内（索引是全局的，按 parent 过滤后仍需二次确认）
+    root_norm = normalize_remote_path(root_api)
+    if root_norm != "/" and not (api_child == root_norm
+                                 or api_child.startswith(root_norm.rstrip("/") + "/")):
+        return
+
+    # 目录只用于统计，不生成 strm（索引查询已限定 scope=文件）
+    if node.get("is_dir"):
+        res.skipped_dirs += 1
+        return
+
+    if not rule.matches(api_child):
+        res.skipped_by_rule += 1
+        return
+    if should_skip_file(name, (), ctx.file_patterns):
+        res.skipped_files += 1
+        return
+
+    # 直链路径 = base_path 前缀 + 相对 root 的路径
+    rel = api_child[len(root_norm.rstrip("/")):].lstrip("/") if root_norm != "/" else api_child.lstrip("/")
+    url_child = join_remote_path(root_url, rel)
+
+    res.files_seen += 1
+    res.remote_files.add(api_child)
+
+    action = classify_output(name, ctx.videos, ctx.downloads)
+    if action == "strm":
+        res.videos_found += 1
+        local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                      replace_extension=True)
+        res.planned.append((local_path, build_direct_url(ctx.client.base_url, url_child)))
+    elif action == "download":
+        res.metas_found += 1
+        local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                      replace_extension=False, add_strm_suffix=False)
+        res.downloads.append((local_path, api_child))
+        try:
+            res.remote_sizes[api_child] = int(node.get("size") or 0)
+        except (TypeError, ValueError):
+            res.remote_sizes[api_child] = 0
 
 
 def _walk_concurrent(

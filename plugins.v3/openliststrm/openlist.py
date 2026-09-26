@@ -286,6 +286,63 @@ class OpenListClient:
             )
         return entries
 
+    def search_index(self, parent: str, scope: int = 0, keywords: str = "",
+                     page: int = 1, per_page: int = 1000,
+                     allow_relogin: bool = True) -> Optional[dict]:
+        """查询 OpenList 的**本地搜索索引**（不触发网盘实时遍历）。
+
+        契约来源：server/handles/search.go + internal/model/search.go
+          POST /api/fs/search
+          body {parent, keywords, scope, page, per_page}
+          scope: 0=全部 1=目录 2=文件
+
+        关键语义（已对 v4.2.6 实测确认）：
+        - `parent` 是**递归匹配**：传 `/EmbyCloud` 会返回整棵子树的条目，
+          每条记录自带完整的 `parent` 路径，因此一次查询即可拿到整棵树。
+        - 索引模式由服务端 `search_index` 设置决定（database / database_non_full_text
+          / bleve / meilisearch / none）。
+        - **索引不存在时**服务端可能返回超时（HTTP 554）或错误，调用方需回退到
+          `/api/fs/list` 实时遍历。
+
+        :return: `{"total": int, "content": [...]}`；失败返回 None（不抛异常，
+                 便于调用方无痛回退）
+        """
+        self._ensure_token()
+        payload = {
+            "parent": parent or "/",
+            "keywords": keywords or "",
+            "scope": int(scope),
+            "page": max(1, int(page)),
+            "per_page": max(1, int(per_page)),
+        }
+        try:
+            body = self._request("POST", "/api/fs/search", json=payload, retry=False)
+        except OpenListError as err:
+            # 401 时重登一次（索引查询同样需要鉴权）
+            if allow_relogin and "401" in str(err):
+                self._relogin()
+                return self.search_index(parent, scope, keywords, page, per_page,
+                                         allow_relogin=False)
+            return None
+        if not body or not response_ok(body):
+            return None
+        data = body.get("data")
+        if not isinstance(data, dict):
+            return None
+        content = data.get("content")
+        return {
+            "total": int(data.get("total") or 0),
+            "content": content if isinstance(content, list) else [],
+        }
+
+    def search_available(self, probe_path: str = "/") -> bool:
+        """探测搜索索引是否可用（用于决定走索引还是回退遍历）。
+
+        只查 1 条，代价极低。索引未启用/未建完时会超时或报错，此时返回 False。
+        """
+        result = self.search_index(probe_path, scope=1, per_page=1)
+        return result is not None
+
     def fetch_base_path(self) -> str:
         """读取当前账号的 base_path。
 

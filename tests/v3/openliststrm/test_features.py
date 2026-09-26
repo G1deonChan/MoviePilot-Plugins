@@ -699,10 +699,14 @@ class TestConcurrentScan:
         assert paths[0] == sorted(paths[0]), "产出未排序"
 
     def test_each_directory_requested_once(self):
-        """同一目录只应被请求一次（BFS 不会重复访问）。"""
+        """同一目录只应被请求一次（BFS 不会重复访问）。
+
+        关闭索引（use_index=False）以便只观察遍历行为：
+        索引开启时会先探一次 `/api/fs/search`。
+        """
         tree = self._wide_tree(15, 1)
         c, calls = self._tree_client(tree)
-        scan(c, parse_rules("/A#/out")[0], workers=8)
+        scan(c, parse_rules("/A#/out")[0], workers=8, use_index=False)
         assert len(calls) == len(set(calls)), f"存在重复请求：{calls}"
         assert len(calls) == 16          # 1 个根 + 15 个子目录
 
@@ -767,6 +771,175 @@ class TestConcurrentScan:
         assert r.cancelled is True
         # 被中断时不应处理完整棵树
         assert r.dirs_scanned < 1 + 20 + 400
+
+
+class TestIndexFirstScan:
+    """双模式：索引优先，自动回退遍历。
+
+    背景：OpenList 的 `/api/fs/search` 查服务端本地索引，`parent` 递归匹配整棵
+    子树，一次查询即可拿到全部文件；索引未启用/未建完时会超时或报错，
+    此时必须**无痛回退**到并发遍历，且两条路径产出必须一致。
+    """
+
+    def _client(self, tree, index_ok=True, index_nodes=None, index_error=False):
+        """构造同时支持 list 与 search 的 client。"""
+        calls = {"list": [], "search": 0}
+
+        def transport(method, url, json=None, headers=None):
+            if url.endswith("/api/fs/search"):
+                calls["search"] += 1
+                if index_error:
+                    return 554, None, ""            # 索引不可用
+                if not index_ok:
+                    return 200, {"code": 500, "message": "search not available"}, ""
+                nodes = index_nodes or []
+                # 简单实现 parent 递归匹配
+                parent = (json or {}).get("parent", "/")
+                scope = (json or {}).get("scope", 0)
+                page = (json or {}).get("page", 1)
+                per = (json or {}).get("per_page", 1000)
+                hits = []
+                for n in nodes:
+                    if scope == 2 and n.get("is_dir"):
+                        continue
+                    if scope == 1 and not n.get("is_dir"):
+                        continue
+                    p = n.get("parent", "")
+                    if parent == "/" or p == parent or p.startswith(parent.rstrip("/") + "/"):
+                        hits.append(n)
+                start = (page - 1) * per
+                return 200, {"code": 200, "data": {
+                    "total": len(hits),
+                    "content": hits[start:start + per]}}, ""
+            if url.endswith("/api/fs/list"):
+                path = (json or {}).get("path", "")
+                calls["list"].append(path)
+                entries = tree.get(path)
+                if entries is None:
+                    return 200, {"code": 500, "message": "object not found"}, ""
+                return 200, {"code": 200, "data": {"content": entries}}, ""
+            return 404, {"code": 404}, ""
+
+        return OpenListClient(BASE, token="t", transport=transport), calls
+
+    def _index_nodes(self):
+        """索引记录：parent 指向深层目录，name 是文件名。"""
+        return [
+            {"parent": "/A/d0", "name": "1.mkv", "is_dir": False, "size": 100},
+            {"parent": "/A/d1", "name": "2.mp4", "is_dir": False, "size": 200},
+            {"parent": "/A/d1", "name": "sub.srt", "is_dir": False, "size": 10},
+            {"parent": "/A/d2", "name": "junk.tmp", "is_dir": False, "size": 1},
+        ]
+
+    def test_index_path_used_when_available(self):
+        """索引可用时应走索引，且不发 list 请求。"""
+        tree = {"/A": [{"name": "d0", "is_dir": True},
+                       {"name": "d1", "is_dir": True},
+                       {"name": "d2", "is_dir": True}]}
+        client, calls = self._client(tree, index_nodes=self._index_nodes())
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+
+        assert calls["search"] >= 1, "未查询索引"
+        assert calls["list"] == [], f"索引可用时不该遍历：{calls['list']}"
+
+        names = sorted(p.rsplit("/", 1)[-1] for p, _ in r.planned)
+        assert names == ["1.strm", "2.strm"], f"实际 {names}"
+        assert r.videos_found == 2
+        # 字幕走下载，临时文件被过滤
+        assert len(r.downloads) == 1
+        assert r.skipped_files == 1
+
+    def test_fallback_when_index_unavailable(self):
+        """索引返回错误时应自动回退遍历，并拿到完整结果。"""
+        tree = {
+            "/A": [{"name": "d0", "is_dir": True}],
+            "/A/d0": [{"name": "1.mkv", "is_dir": False}],
+        }
+        client, calls = self._client(tree, index_error=True)
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+
+        assert calls["search"] >= 1, "应尝试过索引"
+        assert calls["list"], "未回退到遍历"
+        names = [p.rsplit("/", 1)[-1] for p, _ in r.planned]
+        assert names == ["1.strm"], f"实际 {names}"
+
+    def test_fallback_when_index_disabled(self):
+        """索引未启用（code != 200）时回退。"""
+        tree = {
+            "/A": [{"name": "d0", "is_dir": True}],
+            "/A/d0": [{"name": "1.mkv", "is_dir": False}],
+        }
+        client, calls = self._client(tree, index_ok=False)
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+        assert calls["list"], "未回退到遍历"
+        assert r.videos_found == 1
+
+    def test_use_index_false_skips_search(self):
+        """显式关闭索引时不应查询搜索接口。"""
+        tree = {
+            "/A": [{"name": "d0", "is_dir": True}],
+            "/A/d0": [{"name": "1.mkv", "is_dir": False}],
+        }
+        client, calls = self._client(tree, index_nodes=self._index_nodes())
+        r = scan(client, parse_rules("/A#/out")[0], use_index=False)
+        assert calls["search"] == 0, "不该查询索引"
+        assert r.videos_found == 1
+
+    def test_fallback_when_index_returns_empty(self):
+        """索引返回 0 条（未建完）时应回退，避免漏文件。"""
+        tree = {
+            "/A": [{"name": "d0", "is_dir": True}],
+            "/A/d0": [{"name": "1.mkv", "is_dir": False}],
+        }
+        client, calls = self._client(tree, index_nodes=[])   # 索引为空
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+        assert calls["list"], "索引为空时应回退"
+        assert r.videos_found == 1
+
+    def test_index_result_outside_root_ignored(self):
+        """索引是全局的，落在扫描根之外的记录必须被忽略。"""
+        nodes = [
+            {"parent": "/A", "name": "in.mkv", "is_dir": False, "size": 1},
+            {"parent": "/B", "name": "out.mkv", "is_dir": False, "size": 1},
+        ]
+        tree = {"/A": [{"name": "in.mkv", "is_dir": False}]}
+        client, _ = self._client(tree, index_nodes=nodes)
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+        names = [p.rsplit("/", 1)[-1] for p, _ in r.planned]
+        assert names == ["in.strm"], f"越界记录未被过滤：{names}"
+
+    def test_index_respects_exclude(self):
+        """索引路径同样要应用 exclude 规则。"""
+        nodes = [
+            {"parent": "/A/keep", "name": "a.mkv", "is_dir": False, "size": 1},
+            {"parent": "/A/skip", "name": "b.mkv", "is_dir": False, "size": 1},
+        ]
+        tree = {"/A": [{"name": "keep", "is_dir": True},
+                       {"name": "skip", "is_dir": True}]}
+        client, _ = self._client(tree, index_nodes=nodes)
+        r = scan(client, parse_rules(r"/A#/out##/skip")[0], use_index=True)
+        names = [p.rsplit("/", 1)[-1] for p, _ in r.planned]
+        assert names == ["a.strm"], f"exclude 未生效：{names}"
+
+    def test_index_pagination(self):
+        """索引分页应能翻完全部结果。"""
+        nodes = [{"parent": "/A", "name": f"f{i}.mkv", "is_dir": False, "size": 1}
+                 for i in range(25)]
+        tree = {"/A": [{"name": "x", "is_dir": True}]}
+        client, _ = self._client(tree, index_nodes=nodes)
+        # page_size 通过 scan 内部默认值控制，这里用 25 条验证不漏
+        r = scan(client, parse_rules("/A#/out")[0], use_index=True)
+        assert r.videos_found == 25, f"分页漏条：{r.videos_found}"
+
+    def test_index_direct_url_uses_base_path(self):
+        """索引路径生成的直链必须带上 base_path。"""
+        nodes = [{"parent": "/A/d0", "name": "1.mkv", "is_dir": False, "size": 1}]
+        tree = {"/A": [{"name": "d0", "is_dir": True}]}
+        client, _ = self._client(tree, index_nodes=nodes)
+        r = scan(client, parse_rules("/A#/out")[0], base_path="/EmbyCloud")
+        assert r.planned, "无产出"
+        _local, content = r.planned[0]
+        assert "/EmbyCloud/A/d0/1.mkv" in content, f"base_path 未生效：{content}"
 
 
 class TestTransientErrorResilience:

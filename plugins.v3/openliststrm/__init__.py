@@ -66,7 +66,7 @@ class OpenListStrm(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DecaChI/MoviePilot-Plugins/main/icons/openliststrm.png"
     # 插件版本
-    plugin_version = "1.5.0"
+    plugin_version = "1.6.0"
     # 插件作者
     plugin_author = "DecaChI"
     # 作者主页
@@ -103,6 +103,8 @@ class OpenListStrm(_PluginBase):
     _cache_ttl_hours: int = 0
     # 并发遍历线程数（1 = 串行）。实测 8 线程比串行快约 6 倍。
     _workers: int = DEFAULT_WORKERS
+    # 是否优先使用 OpenList 的搜索索引（一次查询拿整棵子树）
+    _use_index: bool = True
     _clear_cache: bool = False
 
     # 失效清理
@@ -143,6 +145,8 @@ class OpenListStrm(_PluginBase):
         except (TypeError, ValueError):
             workers = DEFAULT_WORKERS
         self._workers = max(1, min(32, workers))
+        # 搜索索引：默认开启（索引不可用时插件会自动回退到遍历，无需用户关心）
+        self._use_index = bool(config.get("use_index", True))
         self._clear_cache = bool(config.get("clear_cache"))
         self._cleanup_delete_strm = bool(config.get("cleanup_delete_strm", True))
         self._cleanup_delete_hardlinks = bool(config.get("cleanup_delete_hardlinks"))
@@ -523,8 +527,41 @@ class OpenListStrm(_PluginBase):
                                 "component": "VAlert",
                                 "props": {
                                     "type": "info", "variant": "tonal",
-                                    "text": "目录树缓存：按目录 mtime 持久化遍历结果，远端无变化时直接复用。"
-                                            "实测 795 个目录全量扫描 114s，命中缓存后 0.3s。",
+                                    "text": "性能：优先查询 OpenList 的搜索索引（一次拿到整棵子树），"
+                                            "索引不可用时自动回退到并发遍历。\n"
+                                            "索引需在 OpenList 里开启「搜索索引」并构建完成，"
+                                            "否则插件会自动走遍历路径，结果一致。",
+                                    "style": "white-space: pre-line;",
+                                },
+                            }]),
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(6, [{"component": "VSwitch", "props": {"model": "use_index", "label": "使用搜索索引加速"}}]),
+                            self._col(6, [{
+                                "component": "VTextField",
+                                "props": {
+                                    "model": "cache_ttl_hours",
+                                    "label": "缓存最长有效时长（小时）",
+                                    "placeholder": "0",
+                                    "hint": "仅遍历路径使用。0 表示只依赖目录 mtime",
+                                    "persistent-hint": True,
+                                },
+                            }]),
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            self._col(12, [{
+                                "component": "VAlert",
+                                "props": {
+                                    "type": "info", "variant": "tonal",
+                                    "text": "目录树缓存：按目录 mtime 持久化遍历结果，"
+                                            "远端无变化时直接复用。实测 795 个目录全量扫描 114s，"
+                                            "命中缓存后 0.3s。",
                                     "style": "white-space: pre-line;",
                                 },
                             }]),
@@ -534,16 +571,6 @@ class OpenListStrm(_PluginBase):
                         "component": "VRow",
                         "content": [
                             self._col(4, [{"component": "VSwitch", "props": {"model": "cache_enabled", "label": "启用目录树缓存"}}]),
-                            self._col(4, [{
-                                "component": "VTextField",
-                                "props": {
-                                    "model": "cache_ttl_hours",
-                                    "label": "缓存最长有效时长（小时）",
-                                    "placeholder": "0",
-                                    "hint": "0 表示只依赖目录 mtime；存储不维护 mtime 时可设 24 强制每日刷新",
-                                    "persistent-hint": True,
-                                },
-                            }]),
                             self._col(4, [{
                                 "component": "VBtn",
                                 "props": {
@@ -621,6 +648,7 @@ class OpenListStrm(_PluginBase):
             "download_enabled": True,
             "download_max_files": 0,
             "workers": DEFAULT_WORKERS,
+            "use_index": True,
             "cache_enabled": True,
             "cache_ttl_hours": 0,
             "tasks": "",
@@ -779,6 +807,7 @@ class OpenListStrm(_PluginBase):
             base_path=base_path,
             cache=cache,
             workers=self._workers,
+            use_index=self._use_index,
         )
         for message in result.errors:
             logger.warning(f"[{task.display_name}] {message}")
@@ -1602,6 +1631,7 @@ class OpenListStrm(_PluginBase):
             "download_enabled": self._download_enabled,
             "download_max_files": self._download_max_files,
             "workers": self._workers,
+            "use_index": self._use_index,
             "cache_enabled": self._cache_enabled,
             "cache_ttl_hours": self._cache_ttl_hours,
             "tasks": tasks_to_text(self._tasks),
