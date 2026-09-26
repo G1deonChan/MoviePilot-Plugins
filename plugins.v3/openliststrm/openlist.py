@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from typing import Any, Callable, NamedTuple, Optional
 
@@ -123,6 +124,9 @@ class OpenListClient:
         self._transport = transport
         self._max_entries = max(1, int(max_entries))
         self._retry_attempts = max(1, int(retry_attempts))
+        # 并发遍历时多个线程会同时读写 token，登录也必须串行化，
+        # 否则会重复登录甚至互相把刚拿到的 token 清掉。
+        self._token_lock = threading.Lock()
 
     # ------------------------------------------------------------------ 内部
     def _once(self, method: str, path: str, payload: Optional[dict]) -> HttpResult:
@@ -178,28 +182,38 @@ class OpenListClient:
         return None
 
     def _ensure_token(self) -> None:
-        """未提供 token 时用账号密码换取 token。"""
+        """未提供 token 时用账号密码换取 token（线程安全）。"""
         if self._token:
             return
-        if not self._username or not self._password:
-            raise OpenListError("未配置 OpenList Token，也未提供用户名/密码")
-        payload: dict[str, Any] = {
-            "username": self._username,
-            "password": self._password,
-        }
-        if self._otp_code:
-            payload["otp_code"] = self._otp_code
-        # /api/auth/login 会对明文密码做 StaticHash 后再校验
-        body = self._request("POST", "/api/auth/login", json=payload)
-        if body is None:
-            raise OpenListError("登录请求无响应")
-        if not response_ok(body):
-            raise OpenListError(f"登录失败：{body.get('message') or body}")
-        data = body.get("data") or {}
-        token = data.get("token") if isinstance(data, dict) else None
-        if not token:
-            raise OpenListError("登录响应中未找到 token")
-        self._token = str(token).strip()
+        with self._token_lock:
+            # 双重检查：等锁期间可能已被其它线程登录
+            if self._token:
+                return
+            if not self._username or not self._password:
+                raise OpenListError("未配置 OpenList Token，也未提供用户名/密码")
+            payload: dict[str, Any] = {
+                "username": self._username,
+                "password": self._password,
+            }
+            if self._otp_code:
+                payload["otp_code"] = self._otp_code
+            # /api/auth/login 会对明文密码做 StaticHash 后再校验
+            body = self._request("POST", "/api/auth/login", json=payload)
+            if body is None:
+                raise OpenListError("登录请求无响应")
+            if not response_ok(body):
+                raise OpenListError(f"登录失败：{body.get('message') or body}")
+            data = body.get("data") or {}
+            token = data.get("token") if isinstance(data, dict) else None
+            if not token:
+                raise OpenListError("登录响应中未找到 token")
+            self._token = str(token).strip()
+
+    def _relogin(self) -> None:
+        """清空 token 并重新登录（线程安全）。"""
+        with self._token_lock:
+            self._token = ""
+        self._ensure_token()
 
     # ------------------------------------------------------------------ 公开
     def login(self) -> None:
@@ -245,8 +259,7 @@ class OpenListClient:
             # token 失效 / 过期 / 服务端重启都会返回 401，重登一次再试
             if str(code) == "401":
                 if allow_relogin:
-                    self._token = ""
-                    self._ensure_token()
+                    self._relogin()
                     return self.list_dir(remote_path, password=password,
                                          allow_relogin=False,
                                          tolerate_not_found=tolerate_not_found,

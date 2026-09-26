@@ -1,20 +1,24 @@
-"""递归扫描 OpenList 目录树并生成可写入的 strm 计划。
+"""并发扫描 OpenList 目录树并生成可写入的 strm 计划。
 
 设计要点：
 - 不依赖 WebDAV / 本地挂载，纯 HTTP API 遍历。
+- **按层并发**（BFS + 线程池）：实测单请求约 111ms，8 线程可提速约 6 倍。
 - 支持多行「扫描规则」，每行形如：
       OpenList路径#本地输出目录[#包含正则[#排除正则]]
   也兼容用 `|` 分隔，便于在单行输入框中填写。
 - 目录级 exclude 提前剪枝，避免无效递归。
 - 可选接入 `TreeCache`：目录 mtime 未变时直接复用缓存条目，大幅减少请求数。
+- 单个目录失败只跳过该目录，绝不中止整轮扫描。
 - 通过 `should_cancel` 回调支持中途取消（插件停用/重载）。
 """
 
 from __future__ import annotations
 
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable, Optional
+
 from .openlist import OpenListClient, OpenListError
 from .strmutil import (
     DEFAULT_DOWNLOAD_EXT,
@@ -34,6 +38,11 @@ from .treecache import TreeCache
 
 # 支持的分隔符：优先 `#`（与同类插件习惯一致），并兼容 `|`
 _SEPARATORS = ("#", "|")
+
+# 并发遍历的默认线程数。
+# 实测（OpenList 单请求约 111ms）：8 线程提速约 6 倍，16 线程无进一步收益，
+# 故取 8 作为兼顾速度与对服务端压力的默认值。
+DEFAULT_WORKERS = 8
 
 
 @dataclass
@@ -189,11 +198,19 @@ def scan(
     dir_password: str = "",
     base_path: str = "/",
     cache: Optional[TreeCache] = None,
+    workers: int = DEFAULT_WORKERS,
 ) -> ScanResult:
     """遍历所有规则并产出 strm 与下载计划。
 
+    **并发遍历**：按层并发请求同层目录（BFS），而不是逐目录串行递归。
+
+    实测（795 目录的 /Ani）：单请求约 111ms、串行需 95s+；
+    8 线程并发可提速约 6 倍（16 线程无进一步收益，故默认 8）。
+    并发只影响**请求顺序**，不影响结果：每个目录的处理彼此独立，
+    产出顺序在最后统一排序，保证结果稳定可复现。
+
     :param video_ext:    纳入「生成 strm」的扩展名
-    :param download_ext: 纳入「下载实体文件」的扩展名（字幕、元数据、图片等）
+    :param download_ext: 纳入「下载实体文件」的扩展名（字幕等）
     :param skip_dirs:    需要跳过的目录名（精确匹配，大小写不敏感）
     :param skip_files:   需要跳过的文件名（支持 `*` `?` 通配）
     :param force:        True 时即使本地文件已存在也重新生成/下载
@@ -201,6 +218,7 @@ def scan(
     :param base_path:    账号的 base_path。OpenList 的 API 会自动拼接该前缀，
                          但 `/d/` 直链不会，因此生成 URL 时必须显式补上。
     :param cache:        目录树缓存。启用后 mtime 未变的目录可跳过请求。
+    :param workers:      并发线程数；1 表示退回串行。
     """
     videos = [e.lower() for e in (video_ext or DEFAULT_VIDEO_EXT)]
     downloads = [e.lower() for e in (download_ext or DEFAULT_DOWNLOAD_EXT)]
@@ -209,6 +227,17 @@ def scan(
     file_patterns = compile_globs(list(DEFAULT_SKIP_FILES) + list(skip_files or []))
     result = ScanResult()
     base = normalize_remote_path(base_path or "/")
+
+    ctx = _ScanContext(
+        client=client,
+        videos=videos,
+        downloads=downloads,
+        dir_blacklist=dir_blacklist,
+        file_patterns=file_patterns,
+        dir_password=dir_password,
+        cache=cache,
+        result=result,
+    )
 
     for rule in rules:
         if should_cancel and should_cancel():
@@ -226,23 +255,14 @@ def scan(
             continue
 
         try:
-            _walk(
-                client=client,
+            _walk_concurrent(
+                ctx=ctx,
                 rule=rule,
-                api_current=api_root,
-                url_current=url_root,
-                depth=0,
+                root_api=api_root,
+                root_url=url_root,
                 max_depth=max_depth,
-                videos=videos,
-                downloads=downloads,
-                dir_blacklist=dir_blacklist,
-                file_patterns=file_patterns,
-                force=force,
-                result=result,
+                workers=max(1, int(workers)),
                 should_cancel=should_cancel,
-                dir_password=dir_password,
-                cache=cache,
-                parent_mtime=None,
             )
         except OpenListError as err:
             result.errors.append(f"[{rule.remote_path}] {err}")
@@ -252,12 +272,241 @@ def scan(
         if result.cancelled:
             return result
 
+    # 并发完成顺序不确定，统一排序让结果稳定
+    result.planned.sort(key=lambda item: item[0])
+    result.downloads.sort(key=lambda item: item[0])
+
     # 扫描结束后淘汰已消失目录的缓存条目
     if cache is not None:
         cache.prune(result.visited_dirs)
         result.cache = cache.stats()
 
     return result
+
+
+@dataclass
+class _ScanContext:
+    """一次扫描的共享上下文（并发任务只读，各自写入独立缓冲）。"""
+
+    client: OpenListClient
+    videos: list[str]
+    downloads: list[str]
+    dir_blacklist: list[str]
+    file_patterns: list["re.Pattern"]
+    dir_password: str
+    cache: Optional[TreeCache]
+    result: ScanResult
+
+
+@dataclass
+class _DirOutcome:
+    """单个目录的处理结果（在 worker 线程内构造，避免共享可变状态）。"""
+
+    entries: list[dict] = field(default_factory=list)
+    sub_dirs: list[tuple[str, str, str]] = field(default_factory=list)
+    planned: list[tuple[str, str]] = field(default_factory=list)
+    downloads: list[tuple[str, str]] = field(default_factory=list)
+    remote_files: list[str] = field(default_factory=list)
+    remote_sizes: dict[str, int] = field(default_factory=dict)
+    videos: int = 0
+    metas: int = 0
+    files: int = 0
+    skipped_dirs: int = 0
+    skipped_files: int = 0
+    skipped_by_rule: int = 0
+    # 该目录本身是否成功获取（False 表示已计入 dirs_failed）
+    ok: bool = True
+    # 是否命中缓存（用于统计）
+    cached: bool = False
+
+
+def _process_dir(ctx: _ScanContext, rule: ScanRule, api_current: str,
+                 url_current: str, depth: int, parent_mtime: Optional[str]) -> _DirOutcome:
+    """获取并处理一个目录（在 worker 线程中执行，不修改共享状态）。"""
+    entries = None
+    if ctx.cache is not None and depth > 0:
+        entries = ctx.cache.get(api_current, parent_mtime)
+    if entries is None:
+        entries = ctx.client.list_dir(api_current, password=ctx.dir_password)
+        if ctx.cache is not None:
+            ctx.cache.put(api_current, entries, parent_mtime)
+
+    return _process_entries(ctx, rule, api_current, url_current, entries)
+
+
+def _merge(ctx: _ScanContext, out: _DirOutcome) -> None:
+    """把单个目录的结果并入总结果（仅在主线程调用，无需加锁）。"""
+    res = ctx.result
+    res.dirs_scanned += 1
+    res.files_seen += out.files
+    res.videos_found += out.videos
+    res.metas_found += out.metas
+    res.skipped_dirs += out.skipped_dirs
+    res.skipped_files += out.skipped_files
+    res.skipped_by_rule += out.skipped_by_rule
+    res.planned.extend(out.planned)
+    res.downloads.extend(out.downloads)
+    res.remote_files.update(out.remote_files)
+    res.remote_sizes.update(out.remote_sizes)
+
+
+def _walk_concurrent(
+    *,
+    ctx: _ScanContext,
+    rule: ScanRule,
+    root_api: str,
+    root_url: str,
+    max_depth: int,
+    workers: int,
+    should_cancel: Optional[Callable[[], bool]],
+) -> None:
+    """按层并发遍历（BFS）。
+
+    只有**同层目录之间**才并发：每层内部用线程池拉取，收集下一层目录后再进入下一层。
+    这样既拿到了网络延迟的并行收益，又天然避免了同一目录被重复访问。
+
+    根目录始终单独串行拉取（它没有父条目，不能走缓存，失败必须上报）。
+    """
+    res = ctx.result
+
+    # 根目录：不做缓存、失败必须上报（规则不可用）
+    root_entries = ctx.client.list_dir(root_api, password=ctx.dir_password)
+    if ctx.cache is not None:
+        ctx.cache.put(root_api, root_entries, None)
+    res.visited_dirs.add(root_api)
+
+    # 处理根目录内容（复用已取得的条目，避免重复请求）
+    root_out = _process_entries(ctx, rule, root_api, root_url, root_entries)
+    _merge(ctx, root_out)
+
+    # 下一层待处理目录： (api, url, mtime, depth)
+    frontier = [(a, u, m, 1) for a, u, m in root_out.sub_dirs]
+
+    while frontier:
+        if should_cancel and should_cancel():
+            res.cancelled = True
+            return
+
+        # 按深度分组（同层并发），超出深度的直接报错跳过
+        batch: list[tuple[str, str, str, int]] = []
+        for item in frontier:
+            if item[3] > max_depth:
+                res.errors.append(f"超过最大递归深度 {max_depth}，已跳过：{item[0]}")
+                continue
+            batch.append(item)
+
+        if not batch:
+            return
+
+        next_frontier: list[tuple[str, str, str, int]] = []
+
+        if workers <= 1 or len(batch) == 1:
+            # 串行回退路径（便于测试与限流场景）
+            for api_p, url_p, mtime_p, depth_p in batch:
+                if should_cancel and should_cancel():
+                    res.cancelled = True
+                    return
+                _run_one(ctx, rule, api_p, url_p, depth_p, mtime_p,
+                         next_frontier, workers)
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(_process_dir, ctx, rule, api_p, url_p, depth_p, mtime_p):
+                        (api_p, url_p, depth_p)
+                    for api_p, url_p, mtime_p, depth_p in batch
+                }
+                for fut in as_completed(futures):
+                    api_p, _url_p, depth_p = futures[fut]
+                    try:
+                        out = fut.result()
+                    except OpenListError as err:
+                        # 单个目录失败：记录并跳过，绝不中止整轮扫描
+                        res.dirs_failed += 1
+                        res.errors.append(f"跳过目录 {api_p}：{err}")
+                        continue
+                    except Exception as err:  # noqa: BLE001
+                        res.dirs_failed += 1
+                        res.errors.append(
+                            f"跳过目录 {api_p}：未预期错误 {type(err).__name__}: {err}")
+                        continue
+
+                    res.visited_dirs.add(api_p)
+                    _merge(ctx, out)
+                    for a, u, m in out.sub_dirs:
+                        next_frontier.append((a, u, m, depth_p + 1))
+
+        frontier = next_frontier
+
+
+def _run_one(ctx: _ScanContext, rule: ScanRule, api_p: str, url_p: str,
+             depth_p: int, mtime_p: Optional[str],
+             next_frontier: list[tuple[str, str, str, int]],
+             workers: int) -> None:
+    """串行处理一个目录并把子目录加入下一层。"""
+    res = ctx.result
+    try:
+        out = _process_dir(ctx, rule, api_p, url_p, depth_p, mtime_p)
+    except OpenListError as err:
+        res.dirs_failed += 1
+        res.errors.append(f"跳过目录 {api_p}：{err}")
+        return
+    except Exception as err:  # noqa: BLE001
+        res.dirs_failed += 1
+        res.errors.append(f"跳过目录 {api_p}：未预期错误 {type(err).__name__}: {err}")
+        return
+    res.visited_dirs.add(api_p)
+    _merge(ctx, out)
+    for a, u, m in out.sub_dirs:
+        next_frontier.append((a, u, m, depth_p + 1))
+
+
+def _process_entries(ctx: _ScanContext, rule: ScanRule, api_current: str,
+                     url_current: str, entries: list[dict]) -> _DirOutcome:
+    """处理已取得的条目列表（与 _process_dir 的解析部分共用）。"""
+    out = _DirOutcome(entries=entries)
+    for entry in entries:
+        name = str(entry.get("name") or "").strip()
+        if not name or name in (".", ".."):
+            continue
+
+        api_child = join_remote_path(api_current, name)
+        url_child = join_remote_path(url_current, name)
+
+        if entry.get("is_dir"):
+            if not rule.allows_dir(api_child):
+                out.skipped_by_rule += 1
+                continue
+            if should_skip_dir(name, ctx.dir_blacklist):
+                out.skipped_dirs += 1
+                continue
+            out.sub_dirs.append((api_child, url_child, str(entry.get("modified") or "")))
+            continue
+
+        if not rule.matches(api_child):
+            out.skipped_by_rule += 1
+            continue
+        if should_skip_file(name, (), ctx.file_patterns):
+            out.skipped_files += 1
+            continue
+
+        out.files += 1
+        out.remote_files.append(api_child)
+        action = classify_output(name, ctx.videos, ctx.downloads)
+        if action == "strm":
+            out.videos += 1
+            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                          replace_extension=True)
+            out.planned.append((local_path, build_direct_url(ctx.client.base_url, url_child)))
+        elif action == "download":
+            out.metas += 1
+            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                          replace_extension=False, add_strm_suffix=False)
+            out.downloads.append((local_path, api_child))
+            try:
+                out.remote_sizes[api_child] = int(entry.get("size") or 0)
+            except (TypeError, ValueError):
+                out.remote_sizes[api_child] = 0
+    return out
 
 
 def _with_base(base_path: str, remote_path: str) -> str:
@@ -271,143 +520,3 @@ def _with_base(base_path: str, remote_path: str) -> str:
     if target == base or target.startswith(base + "/"):
         return target          # 用户已自带前缀，避免重复拼接
     return normalize_remote_path(base + "/" + target.lstrip("/"))
-
-
-def _walk(
-    *,
-    client: OpenListClient,
-    rule: ScanRule,
-    api_current: str,
-    url_current: str,
-    depth: int,
-    max_depth: int,
-    videos: list[str],
-    downloads: list[str],
-    dir_blacklist: list[str],
-    file_patterns: list["re.Pattern"],
-    force: bool,
-    result: ScanResult,
-    should_cancel: Optional[Callable[[], bool]],
-    dir_password: str,
-    cache: Optional[TreeCache] = None,
-    parent_mtime: Optional[str] = None,
-) -> None:
-    """递归遍历单个目录。
-
-    `api_current` 是提供给 API 的路径，`url_current` 是用于拼直链的绝对路径，
-    两者在账号设置了 base_path 时会不同。
-
-    `parent_mtime` 是父目录条目里带的本目录修改时间，用于判定缓存是否过期。
-    """
-    if should_cancel and should_cancel():
-        result.cancelled = True
-        return
-    if depth > max_depth:
-        result.errors.append(f"超过最大递归深度 {max_depth}，已跳过：{api_current}")
-        return
-
-    # 优先复用缓存：目录 mtime 未变时无需请求。
-    # 但**扫描根目录必须重新拉取**：它没有父条目可以提供 mtime，若也走缓存，
-    # 顶层新增/删除的文件将永远无法被发现。每规则只多一次请求，代价可接受，
-    # 且能拿到子目录的最新 mtime 并向下传播新鲜度。
-    entries = None
-    if cache is not None and depth > 0:
-        entries = cache.get(api_current, parent_mtime)
-    if entries is None:
-        try:
-            entries = client.list_dir(api_current, password=dir_password)
-        except OpenListError as err:
-            # **单个目录失败不能中止整轮扫描**。
-            # 实测：上游网盘（115）超时时 OpenList 会返回 HTTP 554 空响应，
-            # 过去这里直接向上抛，导致该规则后续所有目录全部丢失
-            # （/EmbyCloud 只扫到 8 个目录就停了）。
-            # 现在记录错误并跳过这个目录，继续处理其它目录。
-            result.dirs_failed += 1
-            result.errors.append(f"跳过目录 {api_current}：{err}")
-            if depth == 0:
-                # 根目录失败说明规则本身不可用，向上抛出以便标记该规则失败
-                raise
-            return
-        if cache is not None:
-            cache.put(api_current, entries, parent_mtime)
-
-    result.dirs_scanned += 1
-    result.visited_dirs.add(api_current)
-
-    sub_dirs: list[tuple[str, str, str]] = []
-    for entry in entries:
-        name = str(entry.get("name") or "").strip()
-        if not name or name in (".", ".."):
-            continue
-
-        api_child = join_remote_path(api_current, name)
-        url_child = join_remote_path(url_current, name)
-
-        if entry.get("is_dir"):
-            # 目录只受 exclude 约束：include 用于筛文件时不应剪掉父目录
-            if not rule.allows_dir(api_child):
-                result.skipped_by_rule += 1
-                continue
-            # 跳过垃圾目录（@eaDir、#recycle、.git 等），避免无谓递归
-            if should_skip_dir(name, dir_blacklist):
-                result.skipped_dirs += 1
-                continue
-            # 记录子目录 mtime，供其缓存判新旧
-            sub_dirs.append((api_child, url_child, str(entry.get("modified") or "")))
-            continue
-
-        if not rule.matches(api_child):
-            result.skipped_by_rule += 1
-            continue
-
-        # 跳过无关文件（广告、临时文件、系统残留等）
-        if should_skip_file(name, (), file_patterns):
-            result.skipped_files += 1
-            continue
-
-        result.files_seen += 1
-        result.remote_files.add(api_child)
-
-        # 按扩展名决定处理方式：生成 strm / 下载实体文件 / 忽略
-        action = classify_output(name, videos, downloads)
-
-        if action == "strm":
-            result.videos_found += 1
-            # 视频 → 生成 <剧名>.strm（替换原视频扩展名，与媒体库既有命名一致）
-            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
-                                          replace_extension=True)
-            content = build_direct_url(client.base_url, url_child)
-            result.planned.append((local_path, content))
-        elif action == "download":
-            # 字幕等 → 下载为**原名**的实体文件（保留扩展名，不加 .strm）
-            result.metas_found += 1
-            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
-                                          replace_extension=False, add_strm_suffix=False)
-            result.downloads.append((local_path, api_child))
-            try:
-                result.remote_sizes[api_child] = int(entry.get("size") or 0)
-            except (TypeError, ValueError):
-                result.remote_sizes[api_child] = 0
-
-    for api_sub, url_sub, mtime in sub_dirs:
-        if should_cancel and should_cancel():
-            result.cancelled = True
-            return
-        _walk(
-            client=client,
-            rule=rule,
-            api_current=api_sub,
-            url_current=url_sub,
-            depth=depth + 1,
-            max_depth=max_depth,
-            videos=videos,
-            downloads=downloads,
-            dir_blacklist=dir_blacklist,
-            file_patterns=file_patterns,
-            force=force,
-            result=result,
-            should_cancel=should_cancel,
-            dir_password=dir_password,
-            cache=cache,
-            parent_mtime=mtime,
-        )

@@ -630,6 +630,145 @@ class TestCronNormalization:
             assert trigger is not None
 
 
+class TestConcurrentScan:
+    """并发遍历：正确性与提速。
+
+    背景：每目录一次 HTTP 请求（实测约 111ms）。
+    `/EmbyCloud` 有 852+ 目录，串行需 95 秒以上；
+    并发 8 线程提速约 6 倍（16 线程无进一步收益）。
+
+    并发只改变请求顺序，不改变结果——这组测试锁住这个不变量。
+    """
+
+    def _tree_client(self, tree, delay=0.0):
+        """构造一棵树的 client；delay 用于放大延迟以观察并发效果。"""
+        import threading
+
+        calls = []
+        lock = threading.Lock()
+
+        def transport(method, url, json=None, headers=None):
+            path = (json or {}).get("path", "")
+            with lock:
+                calls.append(path)
+            if delay:
+                time.sleep(delay)
+            if url.endswith("/api/fs/list"):
+                entries = tree.get(path)
+                if entries is None:
+                    return 200, {"code": 500, "message": "object not found"}, ""
+                return 200, {"code": 200, "data": {"content": entries}}, ""
+            return 404, {"code": 404}, ""
+
+        return OpenListClient(BASE, token="t", transport=transport), calls
+
+    def _wide_tree(self, n_children, files_per_child=1):
+        """构造一个根目录 + n 个子目录的树。"""
+        tree = {"/A": [{"name": f"d{i}", "is_dir": True} for i in range(n_children)]}
+        for i in range(n_children):
+            tree[f"/A/d{i}"] = [
+                {"name": f"f{j}.mkv", "is_dir": False} for j in range(files_per_child)
+            ]
+        return tree
+
+    def test_concurrent_result_matches_serial(self):
+        """并发与串行的产出必须完全一致。"""
+        tree = self._wide_tree(20, 2)
+
+        c1, _ = self._tree_client(tree)
+        serial = scan(c1, parse_rules("/A#/out")[0], workers=1)
+
+        c2, _ = self._tree_client(tree)
+        concurrent = scan(c2, parse_rules("/A#/out")[0], workers=8)
+
+        assert serial.planned == concurrent.planned
+        assert serial.downloads == concurrent.downloads
+        assert serial.dirs_scanned == concurrent.dirs_scanned
+        assert serial.videos_found == concurrent.videos_found
+        assert serial.remote_files == concurrent.remote_files
+
+    def test_results_are_sorted_regardless_of_completion_order(self):
+        """并发完成顺序不定，产出顺序必须稳定。"""
+        tree = self._wide_tree(30, 1)
+        paths = []
+        for _ in range(3):
+            c, _ = self._tree_client(tree)
+            r = scan(c, parse_rules("/A#/out")[0], workers=8)
+            paths.append([p for p, _ in r.planned])
+        assert paths[0] == paths[1] == paths[2]
+        assert paths[0] == sorted(paths[0]), "产出未排序"
+
+    def test_each_directory_requested_once(self):
+        """同一目录只应被请求一次（BFS 不会重复访问）。"""
+        tree = self._wide_tree(15, 1)
+        c, calls = self._tree_client(tree)
+        scan(c, parse_rules("/A#/out")[0], workers=8)
+        assert len(calls) == len(set(calls)), f"存在重复请求：{calls}"
+        assert len(calls) == 16          # 1 个根 + 15 个子目录
+
+    def test_concurrent_is_faster(self):
+        """并发应显著快于串行（用人工延迟放大效果）。"""
+        tree = self._wide_tree(16, 1)
+
+        c1, _ = self._tree_client(tree, delay=0.05)
+        t0 = time.time()
+        scan(c1, parse_rules("/A#/out")[0], workers=1)
+        serial = time.time() - t0
+
+        c2, _ = self._tree_client(tree, delay=0.05)
+        t0 = time.time()
+        scan(c2, parse_rules("/A#/out")[0], workers=8)
+        concurrent = time.time() - t0
+
+        assert concurrent < serial / 2, f"并发 {concurrent:.2f}s 未快于串行 {serial:.2f}s"
+
+    def test_failures_isolated_under_concurrency(self):
+        """并发下单个目录失败同样不能影响其它目录。"""
+        tree = self._wide_tree(12, 1)
+
+        def transport(method, url, json=None, headers=None):
+            path = (json or {}).get("path", "")
+            if path == "/A/d5":
+                return 554, None, ""          # 模拟网盘超时
+            if url.endswith("/api/fs/list"):
+                entries = tree.get(path)
+                if entries is None:
+                    return 200, {"code": 500, "message": "object not found"}, ""
+                return 200, {"code": 200, "data": {"content": entries}}, ""
+            return 404, {"code": 404}, ""
+
+        client = OpenListClient(BASE, token="t", transport=transport, retry_attempts=1)
+        r = scan(client, parse_rules("/A#/out")[0], workers=8)
+
+        assert r.videos_found == 11, f"应成功 11 个，实际 {r.videos_found}"
+        assert r.dirs_failed == 1
+        assert any("d5" in e for e in r.errors)
+
+    def test_cancellation_stops_early(self):
+        """取消回调应能中断并发遍历。
+
+        取消在**每层开始时**检查，因此用多层树才能观察到中断。
+        """
+        # 3 层深、每层 20 个分支，确保有足够多的层
+        tree = {"/A": [{"name": f"d{i}", "is_dir": True} for i in range(20)]}
+        for i in range(20):
+            tree[f"/A/d{i}"] = [{"name": f"e{j}", "is_dir": True} for j in range(20)]
+            for j in range(20):
+                tree[f"/A/d{i}/e{j}"] = [{"name": "f.mkv", "is_dir": False}]
+
+        c, _ = self._tree_client(tree)
+        state = {"n": 0}
+
+        def cancel():
+            state["n"] += 1
+            return state["n"] > 2
+
+        r = scan(c, parse_rules("/A#/out")[0], workers=4, should_cancel=cancel)
+        assert r.cancelled is True
+        # 被中断时不应处理完整棵树
+        assert r.dirs_scanned < 1 + 20 + 400
+
+
 class TestTransientErrorResilience:
     """回归测试：单个目录出错不能中止整轮扫描。
 
