@@ -15,21 +15,32 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 # 默认纳入的视频扩展名（小写，含点）→ 生成 .strm。可在插件配置中覆盖。
+#
+# 注意：**不含 `.strm`**。远端若存在 .strm 文件，它本身就是一个「指向别处的链接」，
+# 再为它生成 .strm 只会得到嵌套的链接文件，没有意义。
 DEFAULT_VIDEO_EXT = [
     ".mp4", ".mkv", ".ts", ".iso", ".rmvb", ".avi", ".mov", ".mpeg", ".mpg",
-    ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".strm", ".tp", ".f4v",
+    ".wmv", ".3gp", ".asf", ".m4v", ".flv", ".m2ts", ".tp", ".f4v",
     ".webm", ".vob", ".divx", ".mts", ".m2t", ".mxf",
 ]
 
-# 默认纳入的「下载」扩展名（字幕、元数据、图片等）→ 实际下载到本地。
-# 这些文件体积小，且媒体服务器刮削/播放时需要真实文件在本地。
-# 注意：不包含 .txt / .html 等纯文本——它们通常是说明或广告，没有媒体库价值。
+# 默认纳入的「下载」扩展名 → 实际下载为本地真实文件。
+#
+# 只收**必须由本插件提供**的文件：
+#   - 字幕：播放时需要与视频同目录的真实文件
+#
+# 刻意**不收** .nfo / .xml / 图片：MoviePilot 的刮削流程会自己生成这些元数据，
+# 插件再下载一份会造成重复，并与刮削结果互相覆盖（实测曾产生 4949 个重复 .nfo）。
+# 若确实需要远端自带的元数据，可在配置里把它们加进「下载扩展名」。
 DEFAULT_DOWNLOAD_EXT = [
     # 字幕
     ".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi", ".ttml",
-    # 元数据
+]
+
+# 旧版默认值（含元数据与图片），仅用于迁移提示，不再作为默认生效
+LEGACY_DOWNLOAD_EXT = [
+    ".srt", ".ass", ".ssa", ".sub", ".idx", ".sup", ".vtt", ".smi", ".ttml",
     ".nfo", ".xml",
-    # 图片
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tbn",
 ]
 
@@ -128,16 +139,23 @@ def strm_target_path(
     remote_root: str = "/",
     *,
     add_strm_suffix: bool = True,
+    replace_extension: bool = True,
 ) -> str:
-    """把远端文件路径映射为本地 strm 输出路径。
+    """把远端文件路径映射为本地输出路径。
 
     - `remote_root`：远端扫描起点（如 `/EmbyCloud`），会从输出中剥离，避免本地多出
       一层与挂载点同名的目录。
-    - `add_strm_suffix`：是否把文件名改为 `<原名>.strm`。
 
-      **必须为 True**（默认）：产物是文本文件，文件名带 `.strm` 后缀才能被
-      「失效检测」「预览清空」「清空全部」等按 `rglob("*.strm")` 查找的功能识别，
-      也符合 Emby/同类插件（如 anistrm）的惯例。视频文件 `a.mkv` 会生成 `a.mkv.strm`。
+    - `replace_extension`：把**文件名的最后一个扩展名替换成 `.strm`**。
+
+      `剧集名.mkv` → `剧集名.strm`。这是与 CloudStrm 等同类插件一致的命名，
+      也是媒体库既有的组织方式，便于从其它工具平滑迁移。
+
+    - `add_strm_suffix`：不替换扩展名，而是**追加** `.strm`（`剧集名.mkv.strm`）。
+      两种风格二选一；`replace_extension` 优先。
+
+    - 单纯传 `add_strm_suffix=False, replace_extension=False` 时保留原文件名，
+      用于下载字幕等实体文件。
 
     - 返回值使用 POSIX 分隔符，调用方再用 `Path` 拼接，保证跨平台一致。
     """
@@ -152,12 +170,15 @@ def strm_target_path(
 
     if not relative:
         relative = posixpath.basename(remote)
-    if add_strm_suffix:
-        # 总是追加 .strm，**不做「已带后缀就不加」的守卫**。
-        # 若加了该守卫，远端同目录下的 a.mkv 与 a.mkv.strm 会映射到同一个
-        # a.mkv.strm，两条计划塌缩成一个文件（后写覆盖前写，静默丢内容）。
-        # 追加则分别得到 a.mkv.strm 与 a.mkv.strm.strm，互不冲突。
+
+    if replace_extension:
+        # 替换最后一个扩展名：a.mkv -> a.strm
+        # 无扩展名的文件（如 "movie"）则追加，避免变成 "movie.strm" 之外的空名
+        stem, ext = posixpath.splitext(relative)
+        relative = f"{stem}{STRM_SUFFIX}" if ext else f"{relative}{STRM_SUFFIX}"
+    elif add_strm_suffix:
         relative = f"{relative}{STRM_SUFFIX}"
+
     return f"{base}/{relative}" if base else relative
 
 

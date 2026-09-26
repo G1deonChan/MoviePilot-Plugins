@@ -66,7 +66,7 @@ class OpenListStrm(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/DecaChI/MoviePilot-Plugins/main/icons/openliststrm.png"
     # 插件版本
-    plugin_version = "1.3.2"
+    plugin_version = "1.4.0"
     # 插件作者
     plugin_author = "DecaChI"
     # 作者主页

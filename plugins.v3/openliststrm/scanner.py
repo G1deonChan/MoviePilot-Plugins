@@ -153,6 +153,8 @@ class ScanResult:
     # 被内置/自定义过滤器跳过的数量
     skipped_dirs: int = 0
     skipped_files: int = 0
+    # 因上游报错被跳过的目录数（不等于 0 说明扫描不完整）
+    dirs_failed: int = 0
     errors: list[str] = field(default_factory=list)
     cancelled: bool = False
     # 远端现存文件的绝对路径集合，供失效检测复用（避免二次遍历）
@@ -312,7 +314,20 @@ def _walk(
     if cache is not None and depth > 0:
         entries = cache.get(api_current, parent_mtime)
     if entries is None:
-        entries = client.list_dir(api_current, password=dir_password)
+        try:
+            entries = client.list_dir(api_current, password=dir_password)
+        except OpenListError as err:
+            # **单个目录失败不能中止整轮扫描**。
+            # 实测：上游网盘（115）超时时 OpenList 会返回 HTTP 554 空响应，
+            # 过去这里直接向上抛，导致该规则后续所有目录全部丢失
+            # （/EmbyCloud 只扫到 8 个目录就停了）。
+            # 现在记录错误并跳过这个目录，继续处理其它目录。
+            result.dirs_failed += 1
+            result.errors.append(f"跳过目录 {api_current}：{err}")
+            if depth == 0:
+                # 根目录失败说明规则本身不可用，向上抛出以便标记该规则失败
+                raise
+            return
         if cache is not None:
             cache.put(api_current, entries, parent_mtime)
 
@@ -358,15 +373,16 @@ def _walk(
 
         if action == "strm":
             result.videos_found += 1
-            # 视频 → 生成 <原名>.strm（必须带后缀，否则检测/清理功能找不到产物）
-            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path)
+            # 视频 → 生成 <剧名>.strm（替换原视频扩展名，与媒体库既有命名一致）
+            local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
+                                          replace_extension=True)
             content = build_direct_url(client.base_url, url_child)
             result.planned.append((local_path, content))
         elif action == "download":
-            # 字幕/元数据/图片等：下载为**原名**的实体文件（不能加 .strm 后缀）
+            # 字幕等 → 下载为**原名**的实体文件（保留扩展名，不加 .strm）
             result.metas_found += 1
             local_path = strm_target_path(rule.local_dir, api_child, rule.remote_path,
-                                          add_strm_suffix=False)
+                                          replace_extension=False, add_strm_suffix=False)
             result.downloads.append((local_path, api_child))
             try:
                 result.remote_sizes[api_child] = int(entry.get("size") or 0)

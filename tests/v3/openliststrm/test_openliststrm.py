@@ -154,40 +154,57 @@ class TestExtensionDetection:
 
 
 class TestStrmTargetPath:
-    """产物路径必须以 .strm 结尾，否则检测/清理功能（rglob("*.strm")）找不到它。"""
+    """命名规则：视频替换扩展名为 .strm，字幕保留原名。"""
 
     def test_strips_remote_root(self):
-        assert strm_target_path("/out", "/EmbyCloud/Movie/a.mkv", "/EmbyCloud") == "/out/Movie/a.mkv.strm"
+        assert strm_target_path("/out", "/EmbyCloud/Movie/a.mkv", "/EmbyCloud") == "/out/Movie/a.strm"
 
     def test_root_keeps_full_path(self):
-        assert strm_target_path("/out", "/Ani/x/a.mkv", "/") == "/out/Ani/x/a.mkv.strm"
+        assert strm_target_path("/out", "/Ani/x/a.mkv", "/") == "/out/Ani/x/a.strm"
 
     def test_chinese_preserved_on_disk(self):
-        assert strm_target_path("/out", "/Ani/中文/a.mkv", "/Ani") == "/out/中文/a.mkv.strm"
+        assert strm_target_path("/out", "/Ani/中文/a.mkv", "/Ani") == "/out/中文/a.strm"
 
     def test_trailing_slash_in_root_dir(self):
-        assert strm_target_path("/out/", "/Ani/a.mkv", "/Ani") == "/out/a.mkv.strm"
+        assert strm_target_path("/out/", "/Ani/a.mkv", "/Ani") == "/out/a.strm"
+
+    def test_replaces_video_extension(self):
+        """核心：剧名.mkv -> 剧名.strm（与 CloudStrm 等同类插件的命名一致）。"""
+        cases = [
+            ("/A/剧集.mkv", "/out/剧集.strm"),
+            ("/A/剧集.mp4", "/out/剧集.strm"),
+            ("/A/剧集.mkv.avi", "/out/剧集.mkv.strm"),      # 只替换最后一个扩展名
+            ("/A/我的剧集.S01E01.2160p.mkv", "/out/我的剧集.S01E01.2160p.strm"),
+        ]
+        for remote, want in cases:
+            got = strm_target_path("/out", remote, "/A")
+            assert got == want, f"{remote} -> {got}，期望 {want}"
 
     def test_download_keeps_original_name(self):
-        """下载实体文件不能加 .strm 后缀。"""
-        got = strm_target_path("/out", "/Ani/中文/a.srt", "/Ani", add_strm_suffix=False)
+        """下载实体文件保留原名，不加也不换后缀。"""
+        got = strm_target_path("/out", "/Ani/中文/a.srt", "/Ani",
+                               replace_extension=False, add_strm_suffix=False)
         assert got == "/out/中文/a.srt"
 
-    def test_no_suffix_opt_out(self):
-        got = strm_target_path("/out", "/A/x.mkv", "/A", add_strm_suffix=False)
-        assert got == "/out/x.mkv"
+    def test_no_extension_gets_suffix(self):
+        """无扩展名的文件追加 .strm，避免生成与目录同名的文件。"""
+        assert strm_target_path("/out", "/A/movie", "/A") == "/out/movie.strm"
 
-    def test_always_appends_suffix(self):
-        """总是追加 .strm，不去重。
+    def test_append_mode_still_available(self):
+        """旧的「追加」风格仍可选择。"""
+        got = strm_target_path("/out", "/A/x.mkv", "/A",
+                               replace_extension=False, add_strm_suffix=True)
+        assert got == "/out/x.mkv.strm"
 
-        若做了「已带后缀就不加」的守卫，远端同目录的 a.mkv 与 a.mkv.strm 会映射到
-        同一个 a.mkv.strm，两条计划塌缩成一个文件（后写覆盖前写，静默丢内容）。
+    def test_video_and_strm_source_do_not_collide(self):
+        """同目录 a.mkv 与 a.mkv.strm 不能映射到同一文件。
+
+        替换规则下：a.mkv -> a.strm，a.mkv.strm -> a.mkv.strm（splitext 保留 .strm）。
+        两者不同，不会互相覆盖。
         """
-        assert strm_target_path("/out", "/A/x.mkv", "/A") == "/out/x.mkv.strm"
-        assert strm_target_path("/out", "/A/x.mkv.strm", "/A") == "/out/x.mkv.strm.strm"
-        # 两者必须不同，否则会互相覆盖
-        assert (strm_target_path("/out", "/A/x.mkv", "/A")
-                != strm_target_path("/out", "/A/x.mkv.strm", "/A"))
+        a = strm_target_path("/out", "/A/a.mkv", "/A")
+        b = strm_target_path("/out", "/A/a.mkv.strm", "/A")
+        assert a != b, f"路径冲突：{a}"
 
     def test_suffix_is_lowercase(self):
         assert strm_target_path("/out", "/A/x.MKV", "/A").endswith(".strm")
@@ -416,7 +433,7 @@ class TestScan:
         assert result.videos_found == 3
         assert result.dirs_scanned == 4
         assert sorted(p for p, _ in result.planned) == [
-            "/out/Movie/a.mkv.strm", "/out/Movie/b.mp4.strm", "/out/TV/S01/e01.mkv.strm"
+            "/out/Movie/a.strm", "/out/Movie/b.strm", "/out/TV/S01/e01.strm"
         ]
         # 视频生成 strm；nfo 归入下载队列
         assert [p for p, _ in result.downloads] == ["/out/Movie/c.nfo"]
@@ -429,7 +446,7 @@ class TestScan:
         result = scan(client, rules, video_ext=VIDEO,
                       download_ext=[".srt", ".nfo", ".jpg"])
 
-        assert [p for p, _ in result.planned] == ["/out/movie.mkv.strm"]
+        assert [p for p, _ in result.planned] == ["/out/movie.strm"]
         assert sorted(p for p, _ in result.downloads) == [
             "/out/movie.nfo", "/out/movie.srt", "/out/poster.jpg"
         ]
@@ -451,7 +468,7 @@ class TestScan:
         rules, _ = parse_rules("/A#/out")
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO, download_ext=[".srt"])
-        assert [p for p, _ in result.planned] == ["/out/a.mkv.strm"]
+        assert [p for p, _ in result.planned] == ["/out/a.strm"]
         assert result.downloads == []
 
     def test_strm_content_is_direct_url(self):
@@ -460,7 +477,7 @@ class TestScan:
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO)
         path, content = result.planned[0]
-        assert path == "/out/01.mp4.strm"
+        assert path == "/out/01.strm"
         assert content == f"{BASE}/d/Ani/01.mp4"
 
     def test_exclude_skips_subtree(self):
@@ -472,7 +489,7 @@ class TestScan:
         rules, _ = parse_rules("/A#/out##/skip")
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO)
-        assert [p for p, _ in result.planned] == ["/out/keep/a.mkv.strm"]
+        assert [p for p, _ in result.planned] == ["/out/keep/a.strm"]
         assert result.skipped_by_rule >= 1
 
     def test_include_filters_paths(self):
@@ -480,7 +497,7 @@ class TestScan:
         rules, _ = parse_rules("/A#/out#movie")
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO)
-        assert [p for p, _ in result.planned] == ["/out/movie.mkv.strm"]
+        assert [p for p, _ in result.planned] == ["/out/movie.strm"]
 
     def test_include_does_not_prune_parent_dirs(self):
         """include 用于筛文件名时，不应因父目录不匹配而剪掉整棵子树。"""
@@ -493,7 +510,7 @@ class TestScan:
         result = scan(client, rules, video_ext=VIDEO)
         # 两个 .mkv 都符合 include，父目录 Season 01 虽不含 ".mkv" 也必须被递归
         assert sorted(p for p, _ in result.planned) == [
-            "/out/Season 01/movie.mkv.strm", "/out/Season 01/other.mkv.strm"
+            "/out/Season 01/movie.strm", "/out/Season 01/other.strm"
         ]
 
     def test_include_matching_nothing_yields_no_error(self):
@@ -519,7 +536,7 @@ class TestScan:
         rules, _ = parse_rules("/Bad#/out1\n/Good#/out2")
         client = OpenListClient(BASE, token="t", transport=transport)
         result = scan(client, rules, video_ext=VIDEO)
-        assert [p for p, _ in result.planned] == ["/out2/a.mkv.strm"]
+        assert [p for p, _ in result.planned] == ["/out2/a.strm"]
         assert result.errors                        # 失败的那条被记录
 
     def test_missing_path_does_not_count_as_error(self):
@@ -556,7 +573,7 @@ class TestScan:
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO)
         path, content = result.planned[0]
-        assert path == "/out/中文名.mkv.strm"
+        assert path == "/out/中文名.strm"
         assert "中文" not in content
 
     def test_base_path_prepended_for_direct_url(self):
@@ -566,7 +583,7 @@ class TestScan:
         client = OpenListClient(BASE, token="t", transport=make_tree_transport(tree))
         result = scan(client, rules, video_ext=VIDEO, base_path="/EmbyCloud")
         path, content = result.planned[0]
-        assert path == "/out/01.mkv.strm"
+        assert path == "/out/01.strm"
         assert content == f"{BASE}/d/EmbyCloud/Ani/01.mkv"
 
     def test_base_path_not_duplicated(self):

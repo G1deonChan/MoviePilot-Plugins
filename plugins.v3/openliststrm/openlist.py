@@ -20,15 +20,22 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional
+import time
+from typing import Any, Callable, NamedTuple, Optional
 
 from .strmutil import iter_entries, response_ok
 
-# 传输层签名：transport(method, url, *, json=None, headers=None) -> (status_code, body_dict|None)
-Transport = Callable[..., "tuple[int, Optional[dict]]"]
+# 传输层签名：
+#   transport(method, url, *, json=None, headers=None) -> (status_code, body_dict|None)
+# 为兼容旧的二元组返回值，内部统一用 `_unpack_response` 归一化。
+Transport = Callable[..., Any]
 
 # 目录条目数量上限保护，避免异常目录（或递归环路）导致内存膨胀
 DEFAULT_MAX_ENTRIES = 200000
+
+# 瞬时错误的重试次数与退避基数（秒）
+DEFAULT_RETRY_ATTEMPTS = 3
+RETRY_BACKOFF = 0.8
 
 # OpenList 对「路径不存在」返回 code=500 而非 404，需按 message 识别
 _NOT_FOUND_HINTS = (
@@ -38,14 +45,60 @@ _NOT_FOUND_HINTS = (
 )
 
 
+class HttpResult(NamedTuple):
+    """一次 HTTP 调用的归一化结果。"""
+
+    status: int
+    body: Optional[dict]
+    raw: str = ""
+
+
+def _unpack_response(result: Any) -> HttpResult:
+    """把传输层返回值归一化成 HttpResult。
+
+    同时接受 `(status, body)` 与 `(status, body, raw)` 两种形状，
+    这样注入的自定义传输实现不必跟着升级。
+    """
+    if isinstance(result, HttpResult):
+        return result
+    if isinstance(result, tuple):
+        if len(result) >= 3:
+            return HttpResult(int(result[0] or 0), result[1], str(result[2] or ""))
+        if len(result) == 2:
+            return HttpResult(int(result[0] or 0), result[1], "")
+    return HttpResult(0, None, "")
+
+
 def _is_not_found(message: str) -> bool:
     """判断错误信息是否表示「路径/对象不存在」。"""
     lowered = str(message or "").lower()
     return any(hint in lowered for hint in _NOT_FOUND_HINTS)
 
 
+def _is_transient_status(status: int) -> bool:
+    """判断 HTTP 状态码是否属于「重试可能成功」的瞬时错误。
+
+    - 0：连接层失败（超时、对端重置）
+    - 429：限流
+    - 5xx：服务端临时故障
+
+    实测：上游网盘（如 115）超时时 OpenList 会返回 **554** 且响应体为空，
+    这类错误重试往往就能成功，不应判定为永久失败。
+    """
+    if status == 0:
+        return True
+    if status == 429:
+        return True
+    return status >= 500
+
+
 class OpenListError(Exception):
     """OpenList 调用失败，携带可读原因，供上层写日志。"""
+
+    def __init__(self, message: str, *, transient: bool = False) -> None:
+        super().__init__(message)
+        # 标记是否为「可重试」的瞬时错误，供调用方决定重试或跳过
+        self.transient = bool(transient)
 
 
 class OpenListClient:
@@ -60,6 +113,7 @@ class OpenListClient:
         otp_code: str = "",
         transport: Optional[Transport] = None,
         max_entries: int = DEFAULT_MAX_ENTRIES,
+        retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     ) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self._token = str(token or "").strip()
@@ -68,10 +122,11 @@ class OpenListClient:
         self._otp_code = str(otp_code or "").strip()
         self._transport = transport
         self._max_entries = max(1, int(max_entries))
+        self._retry_attempts = max(1, int(retry_attempts))
 
     # ------------------------------------------------------------------ 内部
-    def _request(self, method: str, path: str, json: Optional[dict] = None) -> Optional[dict]:
-        """发起一次请求，返回解析后的 JSON（失败返回 None）。"""
+    def _once(self, method: str, path: str, payload: Optional[dict]) -> HttpResult:
+        """发起一次请求并归一化结果（不抛异常）。"""
         if not self.base_url:
             raise OpenListError("未配置 OpenList 地址")
         if self._transport is None:
@@ -81,10 +136,46 @@ class OpenListClient:
         if self._token:
             # OpenList 要求 token 原文；带 "Bearer " 前缀会导致 JWT 解析失败
             headers["Authorization"] = self._token
-        status, body = self._transport(method, url, json=json, headers=headers)
-        if status == 0 or body is None:
-            raise OpenListError(f"请求失败或响应非 JSON：{method} {path}")
-        return body
+        try:
+            return _unpack_response(
+                self._transport(method, url, json=payload, headers=headers)
+            )
+        except Exception as err:  # noqa: BLE001 - 传输层异常统一转成瞬时失败
+            return HttpResult(0, None, f"{type(err).__name__}: {err}")
+
+    def _request(self, method: str, path: str, json: Optional[dict] = None,
+                 *, retry: bool = True) -> Optional[dict]:
+        """发起请求并返回解析后的 JSON。
+
+        失败时抛出 `OpenListError`，并把 HTTP 状态码/响应片段写进信息——
+        网盘后端超时时 OpenList 会返回非 JSON 的错误页（如 HTTP 554 空响应），
+        只说「非 JSON」无法定位问题。
+
+        :param retry: 是否对瞬时错误（5xx/554/连接失败）自动重试
+        """
+        attempts = self._retry_attempts if retry else 1
+        last: Optional[OpenListError] = None
+
+        for attempt in range(attempts):
+            result = self._once(method, path, json)
+            if result.status and result.body is not None:
+                return result.body
+
+            transient = _is_transient_status(result.status)
+            detail = f"HTTP {result.status}" if result.status else "连接失败"
+            if result.raw:
+                detail += f"，响应片段：{result.raw[:120]}"
+            last = OpenListError(
+                f"请求失败或响应非 JSON（{detail}）：{method} {path}",
+                transient=transient,
+            )
+            if not transient or attempt == attempts - 1:
+                raise last
+            time.sleep(RETRY_BACKOFF * (attempt + 1))
+
+        if last is not None:
+            raise last
+        return None
 
     def _ensure_token(self) -> None:
         """未提供 token 时用账号密码换取 token。"""
@@ -115,16 +206,24 @@ class OpenListClient:
         """显式登录（幂等）。"""
         self._ensure_token()
 
+    def _request_with_retry(self, method: str, path: str, json: Optional[dict] = None,
+                            attempts: int = DEFAULT_RETRY_ATTEMPTS) -> Optional[dict]:
+        """兼容旧调用方：重试逻辑现已内建在 `_request` 中。"""
+        return self._request(method, path, json=json,
+                             retry=attempts > 1)
+
     def list_dir(self, remote_path: str, password: str = "",
-                 allow_relogin: bool = True, tolerate_not_found: bool = True) -> list[dict]:
+                 allow_relogin: bool = True, tolerate_not_found: bool = True,
+                 retry_transient: bool = True) -> list[dict]:
         """列出目录全部条目。
 
         使用 `per_page=0`：OpenList 的 `PageReq.Validate()` 会把 `<1` 转成 `MaxInt`，
         即一次返回整个目录，避免逐页翻页带来的重复请求。
 
-        :param allow_relogin:       收到 401 时自动重新登录并重试一次
-        :param tolerate_not_found:  路径不存在时返回空列表而非抛异常
-                                    （OpenList 对不存在的路径返回 code=500 `object not found`）
+        :param allow_relogin:    收到 401 时自动重新登录并重试一次
+        :param tolerate_not_found: 路径不存在时返回空列表而非抛异常
+                                   （OpenList 对不存在的路径返回 code=500 `object not found`）
+        :param retry_transient:  对 5xx/554/连接失败等瞬时错误自动重试
         """
         self._ensure_token()
         payload: dict[str, Any] = {
@@ -134,7 +233,8 @@ class OpenListClient:
             "refresh": False,       # 只读遍历必须 false，否则无写权限会 403
             "password": password or "",
         }
-        body = self._request("POST", "/api/fs/list", json=payload)
+        body = self._request("POST", "/api/fs/list", json=payload,
+                             retry=retry_transient)
         if body is None:
             raise OpenListError(f"列目录无响应：{remote_path}")
 
@@ -149,7 +249,8 @@ class OpenListClient:
                     self._ensure_token()
                     return self.list_dir(remote_path, password=password,
                                          allow_relogin=False,
-                                         tolerate_not_found=tolerate_not_found)
+                                         tolerate_not_found=tolerate_not_found,
+                                         retry_transient=retry_transient)
                 raise OpenListError(f"未授权（token 失效或未登录）：{message}")
 
             # 路径不存在是 OpenList 的常规返回（code=500 + "object not found"），
@@ -157,9 +258,13 @@ class OpenListClient:
             if tolerate_not_found and _is_not_found(message):
                 return []
 
+            # 上游网盘故障时的 code=500（非 not found）也算瞬时错误，
+            # 交给调用方跳过该目录而非中止整轮扫描
+            transient = str(code) in ("500", "502", "503", "504")
             if str(code) in ("403",):
                 raise OpenListError(f"无权限或目录受密码保护：{remote_path} -> {message}")
-            raise OpenListError(f"列目录失败：{remote_path} -> {message}")
+            raise OpenListError(f"列目录失败：{remote_path} -> {message}",
+                                transient=transient)
 
         entries = iter_entries(body)
         if len(entries) > self._max_entries:

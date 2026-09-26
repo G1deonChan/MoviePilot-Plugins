@@ -46,7 +46,7 @@ from mp_plugin_openliststrm.cleanup import (  # noqa: E402
     same_inode,
     url_host,
 )
-from mp_plugin_openliststrm.openlist import OpenListClient  # noqa: E402
+from mp_plugin_openliststrm.openlist import OpenListClient, OpenListError  # noqa: E402
 from mp_plugin_openliststrm.scanner import parse_rules, scan  # noqa: E402
 from mp_plugin_openliststrm.tasks import (  # noqa: E402
     parse_tasks,
@@ -630,14 +630,138 @@ class TestCronNormalization:
             assert trigger is not None
 
 
+class TestTransientErrorResilience:
+    """回归测试：单个目录出错不能中止整轮扫描。
+
+    真实故障：`/EmbyCloud/HDHive` 间歇性返回 HTTP 554 + 空响应体
+    （上游 115 网盘超时）。过去 `list_dir` 直接向上抛，被 `scan()` 的规则级
+    catch 捕获，导致该规则**后续所有目录全部丢失**——`/EmbyCloud` 只扫到
+    8 个目录就停了，日志里也只有一行「非 JSON」。
+    """
+
+    def _client(self, failing_paths, existing=None):
+        """构造一个对指定路径返回 554 空响应的 client。"""
+        calls = []
+
+        def transport(method, url, json=None, headers=None):
+            path = (json or {}).get("path", "")
+            calls.append(path)
+            if path in failing_paths:
+                # 模拟 115 超时：OpenList 返回非标准码且响应体为空
+                return 554, None, ""
+            payload = existing if existing is not None else {}
+            if url.endswith("/api/fs/list"):
+                entries = payload.get(path)
+                if entries is None:
+                    return 200, {"code": 500, "message": "object not found"}, ""
+                return 200, {"code": 200, "data": {"content": entries}}, ""
+            return 404, {"code": 404}, ""
+
+        return OpenListClient(BASE, token="t", transport=transport,
+                              retry_attempts=1), calls
+
+    def test_transient_error_does_not_abort_whole_rule(self):
+        """一个子目录失败，其它子目录仍必须被扫描。"""
+        tree = {
+            "/A": [
+                {"name": "ok1", "is_dir": True},
+                {"name": "bad", "is_dir": True},
+                {"name": "ok2", "is_dir": True},
+            ],
+            "/A/ok1": [{"name": "1.mkv", "is_dir": False}],
+            "/A/bad": [{"name": "x.mkv", "is_dir": False}],
+            "/A/ok2": [{"name": "2.mkv", "is_dir": False}],
+        }
+        client, _ = self._client({"/A/bad"}, tree)
+        rules, _ = parse_rules("/A#/out")
+        result = scan(client, rules)
+
+        planned = sorted(p.rsplit("/", 1)[-1] for p, _ in result.planned)
+        assert planned == ["1.strm", "2.strm"], f"失败目录之后的目录被丢弃：{planned}"
+        assert result.dirs_failed == 1
+        assert any("bad" in e for e in result.errors)
+
+    def test_error_message_includes_status(self):
+        """错误信息必须带 HTTP 状态码，否则无法定位。"""
+        client, _ = self._client({"/A/bad"})
+        with pytest.raises(OpenListError) as exc:
+            client.list_dir("/A/bad", retry_transient=False)
+        assert "554" in str(exc.value)
+
+    def test_transient_is_retried(self):
+        """瞬时错误应被重试，而不是直接失败。"""
+        attempts = {"n": 0}
+
+        def transport(method, url, json=None, headers=None):
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                return 554, None, ""            # 前两次失败
+            return 200, {"code": 200, "data": {"content": []}}, ""
+
+        client = OpenListClient(BASE, token="t", transport=transport,
+                                retry_attempts=3)
+        assert client.list_dir("/A") == []
+        assert attempts["n"] == 3
+
+    def test_permanent_error_not_retried(self):
+        """4xx 是确定性错误，重试无意义。"""
+        attempts = {"n": 0}
+
+        def transport(method, url, json=None, headers=None):
+            attempts["n"] += 1
+            return 200, {"code": 403, "message": "password required"}, ""
+
+        client = OpenListClient(BASE, token="t", transport=transport,
+                                retry_attempts=3)
+        with pytest.raises(OpenListError):
+            client.list_dir("/A")
+        assert attempts["n"] == 1
+
+    def test_root_failure_still_reported(self):
+        """根目录失败说明规则不可用，应记录为规则级错误。"""
+        client, _ = self._client({"/A"})
+        rules, _ = parse_rules("/A#/out")
+        result = scan(client, rules)
+        assert result.errors, "根目录失败必须被报告"
+        assert result.planned == []
+
+    def test_transport_exception_becomes_transient(self):
+        """传输层抛异常（超时/重置）应按瞬时错误处理。"""
+        def transport(method, url, json=None, headers=None):
+            raise TimeoutError("connection timed out")
+
+        client = OpenListClient(BASE, token="t", transport=transport,
+                                retry_attempts=2)
+        with pytest.raises(OpenListError) as exc:
+            client.list_dir("/A")
+        assert exc.value.transient is True
+
+
+class TestFileNameRoundTrip:
+    """命名规则的端到端一致性。"""
+
+    def test_video_becomes_strm_without_double_extension(self):
+        from mp_plugin_openliststrm.strmutil import strm_target_path
+
+        # 剧名.mkv -> 剧名.strm（不是 剧名.mkv.strm）
+        assert strm_target_path("/o", "/A/剧名.mkv", "/A") == "/o/剧名.strm"
+        for ext in (".mp4", ".ts", ".iso", ".rmvb", ".m2ts", ".webm"):
+            got = strm_target_path("/o", f"/A/x{ext}", "/A")
+            assert got == "/o/x.strm", f"{ext} -> {got}"
+
+    def test_subtitle_keeps_extension(self):
+        from mp_plugin_openliststrm.strmutil import strm_target_path
+
+        got = strm_target_path("/o", "/A/x.ass", "/A",
+                               replace_extension=False, add_strm_suffix=False)
+        assert got == "/o/x.ass"
+
+
 class TestEndToEndNaming:
     """端到端回归：scan 计划 → 落盘 → 检测/预览/清空 必须能看到产物。
 
-    审计发现的 bug：写入端产出的文件不带 `.strm` 后缀，而所有消费端用
-    `rglob("*.strm")` 查找 → 检测/预览/清空对插件自己的产物永远是 0 条，
-    使「先检测再确认清理」这套安全流程对真实数据完全不可达。
-
-    这条测试同时锁住该 bug 与后续所有命名变更。
+    写入端产物必须能被 `rglob("*.strm")` 找到，否则检测/预览/清空
+    对插件自己的产物永远是 0 条，使「先检测再确认清理」这套安全流程失效。
     """
 
     def _scan_and_write(self, tmp_path, tree):
@@ -676,7 +800,7 @@ class TestEndToEndNaming:
         strm_found = sorted(p.name for p in out.rglob("*.strm"))
 
         assert result.planned, "应有 strm 计划"
-        assert strm_found == ["movie.mkv.strm"], f"产物未被 *.strm 匹配：磁盘={written}"
+        assert strm_found == ["movie.strm"], f"产物未被 *.strm 匹配：磁盘={written}"
         # 字幕是实体文件，不能带 .strm 后缀
         assert "sub.srt" in written
         assert not list(out.rglob("*.srt.strm"))
@@ -690,7 +814,7 @@ class TestEndToEndNaming:
         out, _ = self._scan_and_write(tmp_path, tree)
 
         found = sorted(p.name for p in iter_strm_files(out))
-        assert found == ["a.mkv.strm", "b.mp4.strm"]
+        assert found == ["a.strm", "b.strm"]
 
     def test_collect_broken_scans_products(self, tmp_path):
         """collect_broken 必须把插件自己的产物纳入扫描（total_scanned > 0）。"""
@@ -704,7 +828,7 @@ class TestEndToEndNaming:
 
         assert plan.total_scanned == 1, "插件自己的产物未被检测流程看到"
         assert plan.count == 1
-        assert plan.broken[0].strm_path.name == "a.mkv.strm"
+        assert plan.broken[0].strm_path.name == "a.strm"
 
     def test_clear_preview_counts_products(self, tmp_path):
         """预览清空必须能统计到产物（用与 _collect_all_strm 相同的 rglob）。"""

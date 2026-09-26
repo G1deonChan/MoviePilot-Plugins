@@ -162,12 +162,32 @@ class TestClassifyOutput:
         assert classify_output(name, DEFAULT_VIDEO_EXT, DEFAULT_DOWNLOAD_EXT) == "strm"
 
     @pytest.mark.parametrize("name", [
-        "a.srt", "b.ass", "c.ssa", "d.sup", "e.vtt",   # 字幕
-        "f.nfo", "g.xml",                              # 元数据
-        "h.jpg", "i.png", "j.webp",                    # 图片
+        "a.srt", "b.ass", "c.ssa", "d.sup", "e.vtt", "f.smi", "g.ttml",
     ])
-    def test_auxiliary_goes_to_download(self, name):
+    def test_subtitle_goes_to_download(self, name):
         assert classify_output(name, DEFAULT_VIDEO_EXT, DEFAULT_DOWNLOAD_EXT) == "download"
+
+    @pytest.mark.parametrize("name", [
+        "a.nfo", "b.xml", "c.jpg", "d.png", "e.webp", "f.tbn",
+    ])
+    def test_metadata_and_images_are_skipped_by_default(self, name):
+        """元数据与图片默认**不下载**。
+
+        它们由 MoviePilot 的刮削流程自己生成；插件再下载一份会造成重复，
+        并与刮削结果互相覆盖（实测曾产生 4949 个重复 .nfo）。
+        需要时用户可把它们加进「下载扩展名」。
+        """
+        assert classify_output(name, DEFAULT_VIDEO_EXT, DEFAULT_DOWNLOAD_EXT) == "skip"
+
+    def test_metadata_can_be_opted_in(self):
+        """把元数据加进自定义列表后应恢复下载。"""
+        custom = list(DEFAULT_DOWNLOAD_EXT) + [".nfo", ".jpg"]
+        assert classify_output("a.nfo", DEFAULT_VIDEO_EXT, custom) == "download"
+        assert classify_output("a.jpg", DEFAULT_VIDEO_EXT, custom) == "download"
+
+    def test_strm_file_is_not_treated_as_video(self):
+        """远端 .strm 不生成 .strm（否则得到嵌套链接文件）。"""
+        assert classify_output("a.strm", DEFAULT_VIDEO_EXT, DEFAULT_DOWNLOAD_EXT) == "skip"
 
     @pytest.mark.parametrize("name", ["a.xyz", "b.rar", "noext", "c."])
     def test_unknown_skipped(self, name):
