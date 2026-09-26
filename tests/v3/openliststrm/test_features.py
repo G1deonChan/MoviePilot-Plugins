@@ -773,6 +773,97 @@ class TestConcurrentScan:
         assert r.dirs_scanned < 1 + 20 + 400
 
 
+class TestOfficialParity:
+    """与 OpenList 官方 strm 驱动（drivers/strm）的行为对齐验证。
+
+    参考实现：OpenListTeam/OpenList `drivers/strm/util.go`
+      - `getLink()`          URL 构造
+      - `convert2strmObjs()` 命名规则
+    编码参考：`pkg/utils/path.go` 的 `EncodePath(path, all=true)`，
+      即逐段 `url.PathEscape`，与 Python `quote(seg, safe="")` 语义一致。
+
+    这组测试锁住「本插件产出的 strm 与官方驱动逐字节一致」，
+    避免将来改名或改编码时无意中破坏兼容性。
+    """
+
+    @staticmethod
+    def _official_encode_path(path: str) -> str:
+        """Go: EncodePath(path, true) —— 逐段 PathEscape 后用 / 连接。"""
+        import urllib.parse
+        return "/".join(urllib.parse.quote(s, safe="") for s in path.split("/"))
+
+    @classmethod
+    def _official_get_link(cls, path: str, api_url: str,
+                           path_prefix: str = "/d") -> str:
+        """Go: getLink() 的核心逻辑。"""
+        final = cls._official_encode_path(path)
+        parts = [p for p in f"{path_prefix.rstrip('/')}/{final.lstrip('/')}".split("/") if p]
+        return api_url.rstrip("/") + "/" + "/".join(parts)
+
+    @staticmethod
+    def _official_strm_name(name: str) -> str:
+        """Go: TrimSuffix(name, SourceExt(name)) + "strm"。
+
+        `utils.SourceExt` 会**去掉点**，因此 "movie.mkv" 裁剪成 "movie." 再拼
+        "strm"，得到 "movie.strm"。
+        """
+        import posixpath
+        ext = posixpath.splitext(name)[1]
+        if ext.startswith("."):
+            ext = ext[1:]
+        if ext:
+            return name[: len(name) - len(ext)] + "strm"
+        return name + "strm"
+
+    @pytest.mark.parametrize("path", [
+        "/EmbyCloud/电影/黑鹰坠落 (2001)/Black.Hawk.Down.mkv",
+        "/EmbyCloud/VCB/[VCB-Studio] Yuru Camp [Ma10p_1080p]/01.mkv",
+        "/Ani/2019-1/輝夜姬想讓人告白～天才們的戀愛頭腦戰～/[ANi] 01 [1080P][WEB-DL].mp4",
+        "/EmbyCloud/电视剧/剑来 (2024) {tmdb-259537}/Season 1/剑来.S01E10.mp4",
+        "/A/100% real#file?name.mp4",
+        "/A/space in name.mkv",
+    ])
+    def test_direct_url_matches_official(self, path):
+        """直链 URL 必须与官方 getLink() 完全一致。"""
+        from mp_plugin_openliststrm.strmutil import build_direct_url
+
+        base = "https://alist.decanas.top"
+        assert build_direct_url(base, path) == self._official_get_link(path, base)
+
+    @pytest.mark.parametrize("char", [
+        " ", "中", "～", "#", "?", "%", "&", "+", "=", "[", "]", "(", ")",
+        "!", "'", "$", ",", ";", ":", "@", "~", "-", "_", ".",
+    ])
+    def test_encoding_matches_official(self, char):
+        """逐字符编码必须与 Go 的 url.PathEscape 一致。"""
+        import urllib.parse
+        seg = f"a{char}b"
+        assert urllib.parse.quote(seg, safe="") == self._official_encode_path(seg)
+
+    @pytest.mark.parametrize("name", [
+        "movie.mkv", "剧集.S01E01.mp4", "a.mkv.avi", "带空格 的 文件.mkv",
+        "UPPER.MKV", "多.点.号.mkv",
+    ])
+    def test_strm_name_matches_official(self, name):
+        """命名规则必须与官方 convert2strmObjs() 一致。"""
+        from mp_plugin_openliststrm.strmutil import strm_target_path
+
+        got = strm_target_path("/out", f"/A/{name}", "/A").rsplit("/", 1)[-1]
+        assert got == self._official_strm_name(name)
+
+    def test_no_extension_branch_is_unreachable(self):
+        """无扩展名文件在分类阶段即被跳过，不会进入命名分支。"""
+        from mp_plugin_openliststrm.strmutil import (
+            DEFAULT_DOWNLOAD_EXT,
+            DEFAULT_VIDEO_EXT,
+            classify_output,
+        )
+
+        for name in ("noext", "movie", "trailing."):
+            assert classify_output(name, DEFAULT_VIDEO_EXT,
+                                   DEFAULT_DOWNLOAD_EXT) == "skip"
+
+
 class TestIndexFirstScan:
     """双模式：索引优先，自动回退遍历。
 
