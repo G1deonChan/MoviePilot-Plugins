@@ -1,7 +1,7 @@
 ### MoviePilot-Plugins 本仓库地址
 
 ```
-https://github.com/DecaChI/MoviePilot-Plugins
+https://github.com/G1deonChan/MoviePilot-Plugins
 ```
 
 ## 插件列表
@@ -13,13 +13,20 @@ https://github.com/DecaChI/MoviePilot-Plugins
 不需要把 OpenList 挂载成 WebDAV / 本地盘，也不需要在 NAS 上额外跑挂载进程。
 插件直接调用 OpenList HTTP API 递归遍历目录树。
 
-- **视频生成 strm**（指向云盘直链），**字幕/NFO/封面下载为本地文件**（播放与刮削必需）
+- **视频生成 strm**（指向云盘直链），**字幕下载为本地文件**（播放必需）
+- **搜索索引加速**：OpenList 启用 Meilisearch 等索引后，一次查询即可拿到整棵子树；
+  索引不可用时自动回退并发遍历，两条路径产出完全一致
+- **并发遍历**：8 线程分层 BFS，实测比串行快约 5.9×
 - **多任务行式配置**：一行一个任务，字段用 `|` 分隔，无需写 JSON
 - **支持多个 OpenList 实例**：每个任务自带地址与凭据，互不影响
 - **无关文件过滤**：内置 20 类垃圾目录 + 32 类无关文件（广告、临时文件、系统残留），可自定义
 - **目录树持久化缓存**：实测 795 目录全量扫描 114s → 命中缓存 0.3s（约 361×）
 - **删除操作全部需手动确认**：保存配置与定时任务不会删除任何文件，
   失效清理走「先检测 → 看清单 → 再确认」流程
+
+> 生成的 strm 与 OpenList 官方 `drivers/strm` 驱动行为对齐：命名按
+> 「替换扩展名」（`a.mkv` → `a.strm`），直链逐段 URL 编码后拼接 `/d/`。
+> 已用官方 Go 算法交叉验证。
 
 需要 **MoviePilot v3.0.0 及以上**。
 
@@ -35,7 +42,7 @@ https://github.com/DecaChI/MoviePilot-Plugins
 在 MoviePilot「设置 → 插件 → 插件市场」中添加本仓库地址：
 
 ```
-https://github.com/DecaChI/MoviePilot-Plugins
+https://github.com/G1deonChan/MoviePilot-Plugins
 ```
 
 然后搜索插件名安装即可。
