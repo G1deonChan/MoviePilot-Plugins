@@ -1,0 +1,546 @@
+#ANi 侦探已死第二季：仅修正 ANi/Baha 1080P 命名，绑定 TMDB 117061 S02，保留原集号
+\[ANi\]\s*偵探已經，死了。Season 2\s*-\s*(\d{2})(?=\s*\[1080P\]\[Baha\]) => [ANi] 侦探已死.{[tmdbid=117061;type=tv;s=2;e=\1]}.S02E\1
+#FX战士久留美 2026 强制绑定电视剧 TMDB 311842
+FX 战士久留美 => FX战士久留美{[tmdbid=311842;type=tv]}
+FX 戰士久留美 => FX战士久留美{[tmdbid=311842;type=tv]}
+#爱书的下克上：为了成为图书管理员不择手段！ 2019 强制绑定电视剧 TMDB 91768
+本好きの下剋上 司書になるためには手段を選んでいられません => 爱书的下克上：为了成为图书管理员不择手段！{[tmdbid=91768;type=tv]}
+#地狱模式 ～喜欢速通游戏的玩家在废设定异世界无双～ 2026 强制绑定电视剧 TMDB 280049
+ヘルモード ～やり込み好きのゲーマーは廃設定の異世界で無双する～ => 地狱模式 ～喜欢速通游戏的玩家在废设定异世界无双～{[tmdbid=280049;type=tv]}
+#ANi 野生的大魔王出現了！第二季（巴哈/ANi 使用全系列絕對集號 13-22，歸一到 TMDB 280042 S02E01-E10，勿依巴哈集號歸入 S01）
+(?<=ANi.*?) 野生的大魔王出[现現][了瞭]！ - (1[3-9]|2[0-2]) => 野生的大魔王出現了！.{[tmdbid=280042;type=tv;s=2]}.S02E\1 && S02E <> \[1080P\] >> EP-12
+#ANi Re：從零開始的異世界生活（TMDB 65942 現行資料為單季絕對集號 85 集：第2季 26-50、第3季 51-66、第4季 67-85；勿依巴哈季號歸入 S02/S03/S04）
+(?<=ANi.*?)Re：從零開始的異世界生活 第二季[\s\-_]*\[?(\d{1,2})\]? => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01E\1 && S01E <> 1080P >> EP+25
+(?<=ANi.*?)Re：从零开始的异世界生活 第二季[\s\-_]*\[?(\d{1,2})\]? => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01E\1 && S01E <> 1080P >> EP+25
+(?<=ANi.*?)Re：從零開始的異世界生活 第四季[\s\-_]*\[?(\d{1,2})\]? => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01E\1 && S01E <> 1080P >> EP+66
+(?<=ANi.*?)Re：从零开始的异世界生活 第四季[\s\-_]*\[?(\d{1,2})\]? => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01E\1 && S01E <> 1080P >> EP+66
+#ANi 用【循環利息】強制收回借出的魔力（巴哈譯名，2026）→ 強制綁定 TMDB 333622《借出去的魔力要用【分期还款】强制收回》
+用【循環利息】強制收回借出的魔力 => 借出去的魔力要用【分期还款】强制收回{[tmdbid=333622;type=tv]}
+用【循环利息】强制收回借出的魔力 => 借出去的魔力要用【分期还款】强制收回{[tmdbid=333622;type=tv]}
+#ANi 相反的你和我（TMDB 278043 為單季 25 集絕對集號：巴哈「第二季」13-25 歸入 S01，勿依「第二季」歸入 S02）
+(?<=ANi.*?)相反的你和我 第二季 - (\d+) => 正相反的你与我.{[tmdbid=278043;type=tv;s=1]}.S01E\1
+#VCB 季号修正 2026-10-27：进击的巨人 26-37=S02/38-59=S03/60-87=S04；南家Okawari=S02/Tadaima=S04；摇曳百合2=S02/3=S03；我们无法一起学习!=S02；圣诞之吻SS+=S02；Free!EternalSummer=S02；全金属狂潮Fumoffu=S02/TSR=S03/IV=S04；灰色乐园=S02；超电磁炮S=S02/T=S03；Hello!!黄金拼图=S02；街角魔族2丁目=S02；命运石之门0=78102；Rewrite14-24=S02
+Shingeki no Kyojin \[(2[6-9]|3[0-7])\](\[Ma10p_1080p\]) => 进击的巨人{[tmdbid=1429;type=tv;s=2]}.S02E\1 \2 && S02E <> \[Ma10p_1080p\] >> EP-25
+Shingeki no Kyojin \[(3[89]|4[0-9]|5[0-9])\](\[Ma10p_1080p\]) => 进击的巨人{[tmdbid=1429;type=tv;s=3]}.S03E\1 \2 && S03E <> \[Ma10p_1080p\] >> EP-37
+Shingeki no Kyojin \[(6[0-9]|7[0-9]|8[0-7])\](\[Ma10p_1080p\]) => 进击的巨人{[tmdbid=1429;type=tv;s=4]}.S04E\1 \2 && S04E <> \[Ma10p_1080p\] >> EP-59
+Minami-ke Okawari => Minami-ke Okawari{[tmdbid=56354;type=tv;s=2]}
+Minami-ke Tadaima => Minami-ke Tadaima{[tmdbid=56354;type=tv;s=4]}
+Yuru Yuri 2 => 摇曳百合 第二季{[tmdbid=52891;type=tv;s=2]}
+Yuru Yuri 3 => 摇曳百合 第三季{[tmdbid=52891;type=tv;s=3]}
+Bokutachi wa Benkyou ga Dekinai! => Bokutachi wa Benkyou ga Dekinai!{[tmdbid=87432;type=tv;s=2]}
+Amagami SS\+ Plus => Amagami SS+ Plus{[tmdbid=52083;type=tv;s=2]}
+Free! -Eternal Summer- => Free! -Eternal Summer-{[tmdbid=61456;type=tv;s=2]}
+Full Metal Panic[?？] Fumoffu => Full Metal Panic? Fumoffu{[tmdbid=39379;type=tv;s=2]}
+Full Metal Panic! The Second Raid => Full Metal Panic! The Second Raid{[tmdbid=39379;type=tv;s=3]}
+Full Metal Panic! Invisible Victory => Full Metal Panic! Invisible Victory{[tmdbid=39379;type=tv;s=4]}
+Grisaia no Rakuen => Grisaia no Rakuen{[tmdbid=61422;type=tv;s=2]}
+Toaru Kagaku no Railgun S => Toaru Kagaku no Railgun S{[tmdbid=30977;type=tv;s=2]}
+Toaru Kagaku no Railgun T => Toaru Kagaku no Railgun T{[tmdbid=30977;type=tv;s=3]}
+Hello!! Kiniro Mosaic => Hello!! Kiniro Mosaic{[tmdbid=78589;type=tv;s=2]}
+Machikado Mazoku 2-Choume => Machikado Mazoku 2-Choume{[tmdbid=88806;type=tv;s=2]}
+Steins;Gate 0 => 命运石之门 零{[tmdbid=78102;type=tv;s=1]}
+Rewrite \[(1[4-9]|2[0-4])\](\[Ma10p_1080p\]) => 罚抄{[tmdbid=66101;type=tv;s=2]}.S02E\1 \2 && S02E <> \[Ma10p_1080p\] >> EP-13
+#VCB 剧场版 擅长捉弄的高木同学（2022，TMDB 938567）：替换别名并绑定电影身份，必须置于通用 TV 规则之前，且替换后不再包含 Karakai Jouzu no Takagi-san 以免再被并入 TV 75865
+Gekijouban Karakai Jouzu no Takagi-san => 擅长捉弄的高木同学 剧场版{[tmdbid=938567;type=movie]}
+#VCB 关于我转生变成史莱姆这档事 2nd Season：BD 特典 [24.9] 归入 TMDB S00E07「日向·坂口」
+\[VCB-Studio\] Tensei Shitara Slime Datta Ken 2nd Season \[24\.9\] => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=7]}
+#VCB 关于我转生变成史莱姆这档事 2nd Season：Part1 总集篇 [36.5] 归入 TMDB S00E08「维鲁多拉日记2」
+\[VCB-Studio\] Tensei Shitara Slime Datta Ken 2nd Season \[36\.5\] => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=8]}
+#VCB 关于我转生变成史莱姆这档事 2nd Season：全系列绝对集号 25-48 归一到 TMDB S02E01-E24
+Tensei Shitara Slime Datta Ken 2nd Season \[ <> \]\[Ma10p_1080p\] >> EP-24
+#VCB 关于我转生变成史莱姆这档事 2nd Season：偏移后 1-9 集输出标准 S02E0x，避免规划器无法解析单数字集号
+Tensei Shitara Slime Datta Ken 2nd Season \[([1-9])\] => Tensei Shitara Slime Datta Ken S02E0\1
+#VCB 关于我转生变成史莱姆这档事 3rd Season：特别篇 [48.5] 归入 TMDB S00E14「迪亚波罗日记」
+\[VCB-Studio\] Tensei Shitara Slime Datta Ken 3rd Season \[48\.5\] => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=14]}
+#VCB 关于我转生变成史莱姆这档事 3rd Season：特别篇 [65.5] 归入 TMDB S00E15「鲁米纳斯回忆录」
+\[VCB-Studio\] Tensei Shitara Slime Datta Ken 3rd Season \[65\.5\] => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=15]}
+#VCB 关于我转生变成史莱姆这档事 3rd Season：全系列绝对集号 49-72 归一到 TMDB S03E01-E24
+Tensei Shitara Slime Datta Ken 3rd Season \[ <> \]\[Ma10p_1080p\] >> EP-48
+#VCB 关于我转生变成史莱姆这档事 3rd Season：偏移后 1-9 集输出标准 S03E0x，避免规划器无法解析单数字集号
+Tensei Shitara Slime Datta Ken 3rd Season \[([1-9])\] => Tensei Shitara Slime Datta Ken S03E0\1
+#========以下识别词由 RemoteIdentifiers 插件添加========#
+轉生為第七王子，隨心所欲的魔法學習之路 第二季 - (\d+) => 轉生為第七王子，隨心所欲的魔法學習之路.{[tmdbid=213830;type=tv;s=1]}.S01E\1
+黑執事 綠之魔女篇 - (\d+) => 黑執事.{[tmdbid=50712;type=tv;s=5]}.S05E\1
+男女之間存在純友情嗎？（不，不存在！） - (\d+) => 男女之間存在純友情嗎？（不，不存在！）.{[tmdbid=217407;type=tv]}.S01E\1
+隨興旅－That′s Journey－ - (\d+) => 隨興旅－That′s Journey－.{[tmdbid=254853;type=tv]}.S01E\1
+去唱卡拉 OK 吧！ - (\d+) => 去唱卡拉 OK 吧！.{[tmdbid=274546;type=tv]}.S01E\1
+天久鷹央的推理病歷表 - (\d+) => 天久鷹央的推理病歷表.{[tmdbid=250994;type=tv]}.S01E\1
+地縛少年花子君 2 - (\d+) => 地縛少年花子君.{[tmdbid=95269;type=tv;s=2]}.S02E\1
+被驅逐出勇者隊伍的白魔導師，被 S 級冒險者撿到 - (\d+) => 被驅逐出勇者隊伍的白魔導師，被S級冒險者撿到.{[tmdbid=284771;type=tv]}.S01E\1
+戀上換裝娃娃 Season 2 - (\d+) => 戀上換裝娃娃.{[tmdbid=123249;type=tv;s=1]}.S01E\1
+The.Apothecary.Diaries.S02(E\d+)(?=.*ADWeb) => The.Apothecary.Diaries.{[tmdbid=219881;type=tv;s=1]}.S01\1 && S01E <> 2025 >> EP+24
+My.Dress-Up.Darling.S02(E\d+)(?=.*ADWeb) => My.Dress-Up.Darling.{[tmdbid=123249;type=tv;s=1]}.S01\1 && S01E <> 2025 >> EP+12
+Minami-ke Okaeri => Minami-ke Okaeri {[tmdbid=56354;type=tv;s=3]}
+青春豬頭少年不會夢到聖誕服女郎 => {[tmdbid=82739;type=tv;s=2]}
+Ma10p_1080p => 1080p
+Code Geass Lelouch of the Rebellion => Code Geass: Lelouch of the Rebellion
+Code Geass: Lelouch of the Rebellion R2 => Code Geass Lelouch of the Rebellion S02
+Seraph of the End：Vampire Reign => Seraph of the End S01
+Seraph of the End：Battle in Nagoya => Seraph of the End S02
+Shakugan no Shana III -Final- => Shakugan no Shana S03
+Shakugan no Shana II => Shakugan no Shana S02
+PSYCHO-PASS II => PSYCHO-PASS II{[tmdbid=43865;type=tv;s=2]}
+Kumo desu ga, Nani ka? => Kumo desu ga, Nani ka?{[tmdbid=99618;type=tv]}
+Tada-kun wa Koi o Shinai => Tada-Kun Wa Koi O Shinai{[tmdbid=75975;type=tv]}
+Uchiage Hanabi, Shita kara Miru ka Yoko kara Miru ka => Uchiage Hanabi, Shita kara Miru ka Yoko kara Miru ka{[tmdbid=431819;type=movie]}
+Sword Art Online II => Sword Art Online II{[tmdbid=45782;type=tv;s=2]}
+Sword Art Online Alicization(?!.*War of Underworld) => Sword Art Online Alicization{[tmdbid=45782;type=tv;s=3]}
+Sword Art Online Alicization War of Underworld => Sword Art Online Alicization War of Underworld{[tmdbid=45782;type=tv;s=4]}
+Sword Art Online -Ordinal Scale- => Sword Art Online -Ordinal Scale-{[tmdbid=413594;type=movie]}
+Karakai Jouzu no Takagi-san => Karakai Jouzu no Takagi-san{[tmdbid=75865;type=tv]}
+Sono Bisque Doll wa Koi wo Suru => Sono Bisque Doll wa Koi wo Suru{[tmdbid=123249;type=tv]}
+Rewrite => Rewrite{[tmdbid=66101;type=tv;s=1]}  # 第一季
+Rewrite - (14|1[5-9]|2[0-9]) => Rewrite{[tmdbid=66101;type=tv;s=2;e=\1-13]} && Rewrite <> [14-29] >> EP-13
+Tenki No Ko => Tenki No Ko{[tmdbid=568160;type=movie]}
+Kimi no Na wa. -your name.- => Kimi no Na wa. -your name.-{[tmdbid=372058;type=movie]}
+Suzume no Tojimari => Suzume no Tojimari{[tmdbid=916224;type=movie]}
+劇場版 進撃の巨人 Season2 覚醒の咆哮 => 劇場版 進撃の巨人 Season2 覚醒の咆哮{[tmdbid=492999;type=movie]}
+劇場版 進撃の巨人 Season1 #2 後編 自由の翼 => 劇場版 進撃の巨人 Season1 #2 後編 自由の翼{[tmdbid=330081;type=movie]}
+進撃の巨人 Season1 #1 前編 紅蓮の弓矢 => 進撃の巨人 Season1 #1 前編 紅蓮の弓矢{[tmdbid=379088;type=movie]}
+# 以下为本实例新增规则（2026-09-30）：地獄模式 280049 / 小書痴的下剋上 91768 / 轉生貴族憑鑑定技能扭轉人生 237150 / 關於我轉生變成史萊姆這檔事 82684
+ヘルモード => 地狱模式 ～喜欢速通游戏的玩家在废设定异世界无双～{[tmdbid=280049;type=tv]}
+本好きの下剋上 => 爱书的下克上：为了成为图书管理员不择手段！{[tmdbid=91768;type=tv]}
+#ANi 轉生貴族憑鑑定技能扭轉人生（TMDB 237150 單季連續集號：第二季 13-24、第三季 25 起，統一歸一到 S01E）
+(?<=ANi.*?)轉生貴族憑鑑定技能扭轉人生 第二季 - (\d+) => 轉生貴族憑鑑定技能扭轉人生.{[tmdbid=237150;type=tv;s=1]}.S01E\1
+(?<=ANi.*?)轉生貴族憑鑑定技能扭轉人生 第三季 - (\d+) => 轉生貴族憑鑑定技能扭轉人生.{[tmdbid=237150;type=tv;s=1]}.S01E\1
+#ANi 關於我轉生變成史萊姆這檔事（ANi/巴哈使用全系列絕對集號，需歸一到 TMDB 各季集號）
+# 48.5 特別篇 -> S00E14（迪亞波羅日記）
+關於我轉生變成史萊姆這檔事 第三季 - 48\.5 => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=14]}
+# 65.5 特別篇 -> S00E15（魯米娜絲回憶錄）
+關於我轉生變成史萊姆這檔事 第三季 - 65\.5 => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=15]}
+# 柯里烏斯之夢 特別篇 01-03 -> S00E11-13
+關於我轉生變成史萊姆這檔事 柯里烏斯之夢 \[特別篇\] - 0?1 => 關於我轉生變成史萊姆這檔事 柯里烏斯之夢 {[tmdbid=82684;type=tv;s=0;e=11]}
+關於我轉生變成史萊姆這檔事 柯里烏斯之夢 \[特別篇\] - 0?2 => 關於我轉生變成史萊姆這檔事 柯里烏斯之夢 {[tmdbid=82684;type=tv;s=0;e=12]}
+關於我轉生變成史萊姆這檔事 柯里烏斯之夢 \[特別篇\] - 0?3 => 關於我轉生變成史萊姆這檔事 柯里烏斯之夢 {[tmdbid=82684;type=tv;s=0;e=13]}
+# 第二季[特別篇]（2021-01-05 播出，第二季 BD Vol.1 特典）-> S00E07
+關於我轉生變成史萊姆這檔事 第二季\[特別篇\] => 關於我轉生變成史萊姆這檔事 特別篇 {[tmdbid=82684;type=tv;s=0;e=7]}
+# 外传《轉生史萊姆日記》独立剧集 118541，12 集
+轉生史萊姆日記 關於我轉生變成史萊姆這檔事\[(\d+)\] => 轉生史萊姆日記.{[tmdbid=118541;type=tv;s=1]}.S01E\1
+# 第二季 25-48 -> S02E01-24
+關於我轉生變成史萊姆這檔事 第二季\[ <> \]\[1080P\] >> EP-24
+# 第三季 49-72 -> S03E01-24
+關於我轉生變成史萊姆這檔事 第三季 - <> \[1080P\] >> EP-48
+# 第四季 73-96 -> S04E01-24
+關於我轉生變成史萊姆這檔事 第四季 - <> \[1080P\] >> EP-72
+# 劇場版 蒼海之淚篇（TMDB 1363974）
+劇場版 關於我轉生變成史萊姆這檔事 蒼海之淚篇 => 關於我轉生變成史萊姆這檔事 蒼海之淚篇{[tmdbid=1363974;type=movie]}
+# 第三季 [特別篇] 01/02 待確認（疑似 48.5/65.5 的重複釋出，暫不加規則）
+#小書痴的下剋上（TMDB 91768）：TMDB 第1季为 1-36 集（第1-3部），第2季为「領主的養女」01-24；以下规则把绝对集号归一到 TMDB 季集
+#HKGS 第二季[NN] 为全系列绝对集号（15-26），归一到 S01
+小書痴的下剋上：為了成為圖書管理員不擇手段！第二季\[(\d+)\] => 小書痴的下剋上：為了成為圖書管理員不擇手段！.{[tmdbid=91768;type=tv;s=1]}.S01E\1
+小书痴的下克上：为了成为图书管理员不择手段！第二季\[(\d+)\] => 小书痴的下克上：为了成为图书管理员不择手段！.{[tmdbid=91768;type=tv;s=1]}.S01E\1
+#ANi 第三季 - NN（27-36）归一到 S01（26A/26B 为总集篇，另行处理）
+小書痴的下剋上：為了成為圖書管理員不擇手段！第三季 - (\d+)(?![0-9AB]) => 小書痴的下剋上：為了成為圖書管理員不擇手段！.{[tmdbid=91768;type=tv;s=1]}.S01E\1
+小书痴的下克上：为了成为图书管理员不择手段！第三季 - (\d+)(?![0-9AB]) => 小书痴的下克上：为了成为图书管理员不择手段！.{[tmdbid=91768;type=tv;s=1]}.S01E\1
+#第三季 26A/26B = 26.5 總集篇上/下，TMDB 无对应条目，暂归入特别篇（S00E05/E06）
+小書痴的下剋上：為了成為圖書管理員不擇手段！第三季 - 26A => 小書痴的下剋上：為了成為圖書管理員不擇手段！.{[tmdbid=91768;type=tv;s=0;e=5]}.S00E05
+小書痴的下剋上：為了成為圖書管理員不擇手段！第三季 - 26B => 小書痴的下剋上：為了成為圖書管理員不擇手段！.{[tmdbid=91768;type=tv;s=0;e=6]}.S00E06
+#ANi「領主的養女」（2026）对应 TMDB 第2季
+小書痴的下剋上 為了成為圖書管理員不擇手段！領主的養女 - (\d+) => 小書痴的下剋上 領主的養女.{[tmdbid=91768;type=tv;s=2]}.S02E\1
+小书痴的下克上 为了成为图书管理员不择手段！领主的养女 - (\d+) => 小书痴的下克上 领主的养女.{[tmdbid=91768;type=tv;s=2]}.S02E\1
+#地獄模式（TMDB 280049）：ANi 第二季沿用全系列绝对集号（13-25），TMDB 第2季只有 13 集，需归一到 S02E01-E13（第1季 01-12 不变）
+地獄模式.*?(?:2nd Season|S02) - <> \[1080P\] >> EP-12
+地狱模式.*?(?:2nd Season|S02) - <> \[1080P\] >> EP-12
+#从零开始的异世界【ADWeb】
+Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S03 => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01 && S01 <> 2024 >> EP+50
+#关于我转生变成史莱姆这档事【ADE】
+That.Time.I.Go.Reincarnated.as.a.Slime => That.Time.I.Got.Reincarnated.as.a.Slime
+#乱马【ADWeb】
+Ranma.S01(?=.*2024) => Ranma.½.S01
+#斗破苍穹【ADWeb】
+斗破苍穹.年番.Fights.Break.Sphere.S05 => 斗破苍穹.Fights.Break.Sphere.S05
+#香格里拉边境S02【ADWeb】
+ShangriLa.Frontier.S02E => ShangriLa.Frontier.S01E && S01 <> 2024 >> EP+25
+#狐妖小红娘 镜花缘篇【ADWeb】
+(?<=Fox.Spirit.Matchmaker.*?)S12E(?=.*ADWeb) => S01E && S01E  <> 2024 >> EP+157
+(?<=Fox.Spirit.Matchmaker.*?)2024(?=.*ADWeb) => 2015
+#吞噬星空【ADWeb】
+(?<=Swallowed.Star.S02.*?)2021 => 2020
+(?<=Swallowed.Star.S03.*?)2022 => 2020
+(?<=Swallowed.Star.S04.*?)2023 => 2020
+(?<=Swallowed.Star.S05.*?)2024 => 2020
+(?<=Swallowed.Star.S06.*?)2025 => 2020
+(?<=Swallowed.Star.S07.*?)2026 => 2020
+Swallowed.Star.S02(?=.*ADWeb) => Swallowed.Star.S01
+Swallowed.Star.S03(?=.*ADWeb) => Swallowed.Star.S01
+Swallowed.Star.S04(?=.*ADWeb) => Swallowed.Star.S01 && S01 <> 2020 >> EP+85
+Swallowed.Star.S05(?=.*ADWeb) => Swallowed.Star.S01
+Swallowed.Star.S06(?=.*ADWeb) => Swallowed.Star.S01
+Swallowed.Star.S07(?=.*ADWeb) => Swallowed.Star.S01
+#一念永恒【ADWeb】
+(?<=A.Will.Eternal.S03.*?)2024 => 2020
+A.Will.Eternal.S03E => A.Will.Eternal.S01E && S01E <> 2020 >> EP+106
+(?<=Yi.Nian.Yong.Heng.S03.*?)2024 => 2020
+Yi.Nian.Yong.Heng.S03E => Yi.Nian.Yong.Heng.S01E && S01E <> 2020 >> EP+106
+#白夜追凶【ADWeb】
+Day.and.Night(?=.+ADWeb) => 白夜追凶.Day.and.Night
+#少年白马醉春风【ADWeb】
+少年白马醉春风.The.Young.Brewmaster(?:s|'s).Adventure.S02E(?=.+ADWeb) => The.Young.Brewmasters.Adventure.S02E && S02E <> 2024 >> EP-20
+#死神【ADWeb】
+(?i)BLEACH.Sennen.Kessen.hen.S01(?=.*ADWeb) => BLEACH.Sennen.Kessen.hen.S02 {[tmdbid=30984;type=tv;s=2]}
+(?i)BLEACH.Sennen.Kessenhen.S01(?=.*ADWeb) => BLEACH.Sennen.Kessen.hen.S02 {[tmdbid=30984;type=tv;s=2]}
+#2025年1月新番【ADWeb】
+#最弱技能《果实大师》 ～关于能无限食用技能果实（吃了就会死）这件事～【ADWeb】
+Hazure.Skill.Kinomi.Master.Skill.no.Mi.Tabetara.Shinu.wo.Mugen.ni.Taberareru.You.ni.Natta.Ken.Nitsuite => Kinomi.Master
+(?<=Kinomi.Master.S01.*?)2025 => 2024
+#S级怪兽《贝希摩斯》被误认成小猫，成为精灵女孩的骑士(宠物)一起生活【ADWeb】
+(?<=S-Rank.Monster.no.Behemoth.Dakedo.Neko.to.Machigawarete.Elf.Musume.no.Pet.to.Shite.Kurashitemasu.S01.*?)2024 => 2025
+#假面骑士加布【ADWeb】
+假面骑士加布.Kamen.Rider.Gavv.S01 => Kamen.Rider.Gavv.S35
+Kamen.Rider.Gavv.S01 => Kamen.Rider.Gavv.S35
+#药屋少女的呢喃【ADWeb】搜索关键词添加【薬屋のひとりごと】
+The.Apothecary.Diaries => Kusuriya.no.Hitorigoto
+(?<=Kusuriya.no.Hitorigoto.S02.+?)2025 => 2024
+Kusuriya.no.Hitorigoto.S02 => Kusuriya.no.Hitorigoto.S01 && S01E <> 2024 >> EP+24
+#少年歌行 第四季【ADWeb】
+(?<=Great.Journey.of.Teenagers.S04.*?)2025 => 2018
+#亚刻奥特曼【ADWeb】
+Ultraman.Arc.S01E01 => Ultraman.Arc.S00E01
+Ultraman.Arc.S01E08 => Ultraman.Arc.S00E02
+Ultraman.Arc.S01E18 => Ultraman.Arc.S00E03
+Ultraman.Arc.S01E27 => Ultraman.Arc.S00E04
+Ultraman.Arc.S01E(0[2-7]) => Ultraman.Arc.S01E\1 && S01 <> 2024 >> EP-1
+Ultraman.Arc.S01E(09|1[0-7]) => Ultraman.Arc.S01E\1 && S01 <> 2024 >> EP-2
+Ultraman.Arc.S01E(19|2[0-6]) => Ultraman.Arc.S01E\1 && S01 <> 2024 >> EP-3
+Ultraman.Arc.S01E(2[8-9]) => Ultraman.Arc.S01E\1 && S01 <> 2024 >> EP-4
+#我的幸福婚姻 【ADWeb】搜索关键词添加【My Happy Marriage】
+(?<=My.Happy.Marriage.S02.+?)2025 => 2023
+My.Happy.Marriage.S02E => My.Happy.Marriage.S01E && S01E <> 2023 >> EP+12
+#筋肉人 完美超人始祖篇【ADWeb】
+Kinnikuman.Kanpeki.Choujin.Shisohen.S01 => Kinnikuman.Kanpeki.Choujin.Shisohen.S02 && S02 <> 2024 >> EP-11
+#凡人修仙传 虚天战纪【ADWeb】
+A.Record.Of.Mortals.Journey.To.Immortality.S00 => 虚天战纪 S01
+#斗罗大陆2：绝世唐门【ADWeb】
+Soul Land S02 => Soul Land II: The Unrivaled Tang 
+斗罗大陆.Soul.Land.S02 => Soul Land II: The Unrivaled Tang 
+#在地下城寻求邂逅是否搞错了什么【ADE】
+Is.It.Wrong.to.Try.to.Pick.Up.Girls.in.a.Dungeon => Danmachi
+Danmachi.S01OVA(?=.+ADE) => Danmachi.S00E01
+Danmachi.S02OVA(?=.+ADE) => Danmachi.S00E03
+Danmachi.S03OVA(?=.+ADE) => Danmachi.S00E04
+#风物妖厨【ADWeb】
+Mythical Feasts => Fengwu Demon Chef
+#堀与宫村【ADE】
+Horimiya(?=.+ADE) => Horimiya{[tmdbid=110070;type=tv]}
+#机动战士高达：水星的魔女【ADE】
+Mobile.Suit.Gundam.The.Witch.from.Mercury.S02 => Mobile.Suit.Gundam.The.Witch.from.Mercury.S01 && S01 <> 2023 >> EP+12
+#进击的巨人【ADE】
+Attack.on.Titan.OADE01(?=.+ADE) => Attack.on.Titan.S00E15
+Attack.on.Titan.OADE02(?=.+ADE) => Attack.on.Titan.S00E16
+Attack.on.Titan.OADE03(?=.+ADE) => Attack.on.Titan.S00E13
+Attack.on.Titan.OADE04(?=.+ADE) => Attack.on.Titan.S00E07
+Attack.on.Titan.OADE05(?=.+ADE) => Attack.on.Titan.S00E14
+Attack.on.Titan.OADE06(?=.+ADE) => Attack.on.Titan.S00E17
+Attack.on.Titan.OADE07(?=.+ADE) => Attack.on.Titan.S00E18
+Attack.on.Titan.OADE08(?=.+ADE) => Attack.on.Titan.S00E19
+Attack.on.Titan.S04E29-31(?=.+ADE) => Attack.on.Titan.S00E36
+Attack.on.Titan.S04E32-35(?=.+ADE) => Attack.on.Titan.S00E37
+#完美世界【ADWeb】
+(?<=Perfect.World.*?)202(2|3) => 2021
+Perfect.World.S0(2|3|4)(?=.+ADWeb) => Perfect.World.S01
+#假面骑士时王【ADWeb】
+假面骑士时王.Kamen.Rider.Zi-O.S01 => Kamen.Rider.S29
+#海贼王【ADWeb CR源】
+One.Piece.S01E0(?=(06[0-1]|0[1-5][0-9]|00[1-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S01E
+One.Piece.S01E0(?=(07[0-7]|06[2-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S02E
+One.Piece.S01E0(?=(09[0-1]|08[0-9]|07[8-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S03E
+One.Piece.S01E(?=(09[2-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S04E
+One.Piece.S01E(?=(130|1[0-2][0-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S04E
+One.Piece.S01E(?=(14[0-3]|13[1-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S05E
+One.Piece.S01E(?=(19[0-5]|1[5-8][0-9]|14[4-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S06E
+One.Piece.S01E(?=(22[0-8]|2[0-1][0-9]|19[6-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S07E
+One.Piece.S01E(?=(26[0-3]|2[3-5][0-9]|229)[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S08E
+One.Piece.S01E(?=(33[0-6]|3[0-2][0-9]|2[7-9][0-9]|26[4-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S09E
+One.Piece.S01E(?=(38[0-1]|3[4-7][0-9]|33[7-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S10E
+One.Piece.S01E(?=(40[0-7]|39[0-9]|38[2-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S11E
+One.Piece.S01E(?=(42[0-1]|41[0-9]|40[8-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S12E
+One.Piece.S01E(?=(52[0-2]|5[0-1][0-9]|4[3-9][0-9]|42[2-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S13E
+One.Piece.S01E(?=(580|5[3-7][0-9]|52[3-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S14E
+One.Piece.S01E(?=(64[0-2]|6[0-3][0-9]|59[0-9]|58[1-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S15E
+One.Piece.S01E(?=(69[0-2]|6[5-8][0-9]|64[3-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S16E
+One.Piece.S01E(?=(74[0-8]|7[0-3][0-9]|69[3-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S17E
+One.Piece.S01E(?=(80[0-3]|7[5-9][0-9]|749)[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S18E
+One.Piece.S01E(?=(87[0-7]|8[1-6][0-9]|80[4-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S19E
+One.Piece.S01E(?=(89[0-1]|88[0-9]|87[8-9])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S20E
+One.Piece.S01E(?=(89[2-9]|9[0-9]{2}|10[0-7][0-9]|108[0-8])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S21E
+One.Piece.S01E(?=(1089|109[0-9]|11[0-4][0-9]|115[0-5])[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S22E
+One.Piece.S01E(?=(115[6-9]|11[6-9]\d|1[2-9]\d{2})[.\s]) => 海贼王{[tmdbid=37854;type=tv]} S23E
+#莉可丽丝：友谊是时间的窃贼【ADWeb】
+Lycoris.Recoil.Friends.are.thieves.of.time(?=.+ADWeb) => 莉可丽丝 S02 {[tmdbid=154494;type=tv;s=2]}
+#奔跑吧 第13季【ADWeb】
+Keep.Running.S09(?=.+ADWeb) => Keep.Running.S13
+#刑侦12【ADWeb】
+刑侦12.D.I.D..12 => One-twelfth
+#仙逆剧场版【ADWeb】
+Renegade.Immortal.Movie.Shen.Lin.Zhi.Zhan => 仙逆剧场版：神临之战
+#诛仙第三季【ADWeb】
+Jade.Dynasty.S01E(2[7-9]|3[0-9]|4[0-9]|5[0-2])(?=.+ADWeb) => Jade.Dynasty.S02E\1 && S02E <> 2024 >> EP-26
+#国色芳华第二季【ADWeb】
+In.the.Name.of.Blossom.S01(?=.*ADWeb) => In.the.Name.of.Blossom.S02
+#租借女友第四季【ADWeb】
+Kanojo.Okarishimasu.S04E(?=.*ADWeb) => Kanojo.Okarishimasu.{[tmdbid=96316;type=tv;s=1]}.S01E && S01E <> 2025 >> EP+36
+#青春笨蛋少年不做圣诞服女郎的梦【ADWeb】
+Seishun.Buta.Yarou.wa.Santa.Claus.no.Yume.wo.Minai.S01E(?=.*ADWeb) => Seishun.Buta.Yarou.wa.Santa.Claus.no.Yume.wo.Minai.S02E
+#被驱逐开勇者派对的白魔导师，被S级冒险者捡到 ～这个白魔导师超规格～【ADWeb】
+Yuusha.Party.wo.Tsuihou.Sareta.Shiro.Madoushi.S.Rank.Boukensha.ni.Hirowareru.Kono.Shiro.Madoushi.ga.Kikakugaisugiru(?=.*ADWeb) => The White Mage Who Was Banished From the Hero's Party Is Picked Up by an S Rank Adventurer{[tmdbid=284771;type=tv]}
+#我们不可能成为恋人！绝对不行。（※似乎可行？）【ADWeb】
+Watashi.ga.Koibito.ni.Nareru.Wake.Naijan.Murimuri.Muri.ja.Nakatta(?=.*ADWeb) => 我们不可能成为恋人！绝对不行{[tmdbid=277513;type=tv]}
+# 更衣人偶坠入爱河 第二季【ADWeb】
+Sono.Bisque.Doll.wa.Koi.wo.Suru.S02E(?=.*ADWeb) => 更衣人偶坠入爱河{[tmdbid=123249;type=tv]}S01E && S01E <> 2025 >> EP+12
+#我们不可能成为恋人！绝对不行【ADWeb】
+#转生为第七王子，随心所欲的魔法学习之路【ADWeb】
+Tensei.Shitara.Dai.Nana.Ouji.Dattanode.Kimamani.Majutsu.wo.Kiwamemasu.S02E(?=.+ADWeb) => Tensei.Shitara.Dai.Nana.Ouji.Dattanode.Kimamani.Majutsu.wo.Kiwamemasu.S01E
+#噗妮露是可爱史莱姆 第二季【ADWeb】
+Puniru.wa.Kawaii.Slime.S02E(?=.*ADWeb) => Puniru.wa.Kawaii.Slime.S01E && S01E <> 2025 >> EP+12
+#斗罗大陆剧场版 剑道尘心【ADWeb】
+Soul.Land.Movie.Jian.Dao.Chen.Xin(?=.*ADWeb) => Douluo.Dalu.Movie.Kendo.Dust.Heart
+#怪兽8号 第二季【ADWeb】
+Kaijuu.8.gou.S02(?=.*ADWeb) => Kaijuu.8.gou.S01
+(?<=Kaijuu.8.gou.S01.*?)2025 => 2024
+#紫川第二季【ADWeb】
+Eternal.Brotherhood(?=.*2025) => Eternal.Brotherhood{[tmdbid=153869;type=tv]}
+#这就是僵尸吗【ADE】
+Is.This.a.Zombie(?=.*ADE) => Koreha.Zombie.Desuka
+#三坪房间的侵略者【ADE】
+Invaders.of.the.Rokujyouma => Rokujouma.no.Shinryakusha
+#百炼成神 第三季【ADWeb】
+百炼成神.Apotheosis.S03 => Apotheosis.S03
+Apotheosis.S03 => Apotheosis{[tmdbid=213791;type=tv]}.S01 && S01 <> 2025 >> EP+104
+(?<=Apotheosis.*?)2025(?=.*ADWeb) => 2022
+#极速车魂 第三季【ADWeb】
+MF.GHOST.S03(?=.*ADWeb) => MF.GHOST.S01 && S01 <> 2026 >> EP+24
+#咒术回战第三季【ADWeb】
+Jujutsu.Kaisen.S03E(?=.*ADWeb) => Jujutsu.Kaisen.S01E && S01E <> 2026 >> EP+47
+#模范出租车 第三季【ADWeb】
+Taxi.Driver.Season.3.S01(?=.*ADWeb) => Taxi.Driver.S03
+#我推的孩子 第三季【ADWeb】
+\【我推的孩子\】 => 我推的孩子
+Oshi.no.Ko.S03E(?=.*ADWeb) => Oshi.no.Ko.{[tmdbid=203737;type=tv]}.S01E && S01E <> 2026 >> EP+24
+#葬送的芙莉莲第二季【ADWeb】
+Sousou.no.Frieren.S02E(?=.*ADWeb) => Sousou.no.Frieren.S01E && S01E <> 2026 >> EP+28
+#地狱乐 第二季【ADWeb】
+Jigokuraku.S02E(?=.*ADWeb) => Jigokuraku.S01E && S01E <> 2026 >> EP+13
+#权欲之巅【ADWeb】
+Climax(?=.*ADWeb) => 权欲之巅.Climax{[tmdbid=241860];type=tv}
+ #小书痴的下克上 第二季【ADWeb】
+Honzuki.no.Gekokujou.Shisho.ni.Naru.Tame.ni.wa.Shudan.wo.Erandeiraremasen => Honzuki.no.Gekokujou
+Honzuki.no.Gekokujou.S04E(?=.*ADWeb) => Honzuki.no.Gekokujou.S02E
+#租借女友 第五季【ADWeb】
+Kanojo.Okarishimasu.S05(?=.*ADWeb) => Kanojo.Okarishimasu.{[tmdbid=96316;type=tv]}.S01 && S01 <> 2026 >> EP+48
+#Re：从零开始的异世界生活 第四季【ADWeb】
+Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S04E(?=.*ADWeb) => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01E && S01E <> 2026 >> EP+66
+#主角【ADWeb】
+Main.Character(?=.*2026.*ADWeb) => Main.Character{[tmdbid=284110;type=tv]}
+#灵魂摆渡·十年【ADWeb】
+灵魂摆渡.The.Ferry.Man.S05E(?=.*2026) => 灵魂摆渡十年.The.Ferry.Man.S01E
+The.Ferry.Man.S05E(?=.*2026) => 灵魂摆渡十年.The.Ferry.Man.S01E
+#绝世战魂 S02【ADWeb】
+(?<=Peerless Battle Spirit S02.*?)2026 => 2024
+Peerless.Battle.Spirit.S02(?=.*ADWeb) => Peerless.Battle.Spirit.S01 && S01 <> 2024 >> EP+180
+#泛用修正规则，用于去除多余文件名
+\[猎户手抄部\].*\/ => [猎户手抄部]
+\[Strange-Raw\].*\/ => [Strange-Raw]
+\[ANi\].*\/ => [ANi]
+#ANi
+(?<=ANi.*?)龍族II 悼亡者之瞳 => 龙族 (2022) S02
+(?<=ANi.*?)銀魂 3 年 Z 班銀八老師 => 3年Z組銀八先生
+(?<=ANi.*?)假面骑士 ZEZTZ => 假面骑士ZZZ
+#藤本树 17-26
+(藤本树.17-26)|(Fujimoto.Tatsuki.17-26)|(藤本树17-26.Tatsuki.Fujimoto.17-26) => Fujimoto Tatsuki{[tmdbid=299778;type=tv]}
+#拥有超常技能的异世界流浪美食家
+(?<=ANi.*?)拥有超常技能的异世界流浪美食家 S2 - (\d+) => 拥有超常技能的异世界流浪美食家.S01E\1
+My.Dress-Up.Darling.S02(E\d+)(?=.*FROGWeb) => My.Dress-Up.Darling.{[tmdbid=123249;type=tv;s=1]}.S01\1 && S01E <> 2025 >> EP+12
+#拔作岛
+Is.the.island.Utopia.or.Dystopia(?=.*ADWeb) => 拔作岛
+#怪兽8号
+#海贼王s22
+One.Piece.S01E(1[1-9][0-9][0-9]|109[0-9]|108[6-9])(?=.*ADWeb) => 海贼王 S22E\1
+#青春猪头少年不会梦到兔女郎学姐.S02
+(?<=ANi.*?) 青春猪头少年不会梦到圣诞服女郎 - (\d+) => 青春猪头少年不会梦到兔女郎学姐.S02E\1
+Seishun.Buta.Yarou.wa.Santa.Claus.no.Yume.wo.Minai.S01E(\d+)(?=.*ADWeb) => 青春猪头少年不会梦到兔女郎学姐.S02E\1
+#转生为第七王子，随心所欲的魔法学习之路 第二季
+Tensei.Shitara.Dai.Nana.Ouji.Dattanode.Kimamani.Majutsu.wo.Kiwamemasu.S02E(1[3-9]|2[0-9])(?=.*ADWeb) => 转生为第七王子，随心所欲的魔法学习之路.S01
+(?<=ANi.*?) 转生为第七王子，随心所欲的魔法学习之路 第二季 - (1[3-9]|2[0-9]) => 转生为第七王子，随心所欲的魔法学习之路.S01E\1
+#与游戏中心的少女异文化交流的故事
+游乐场少女的异文化交流 => 与游戏中心的少女异文化交流的故事
+#明日方舟S03
+((.+)|)Arknights.S01E(1[7-9]|2[0-9])(?=.*ADWeb) => 明日方舟 S03E\3 && S03 <> 2022 >> EP-16
+#被驱逐开勇者派对的白魔导师，被S级冒险者捡到 ～这个白魔导师超规格～
+Yuusha.Party.wo.Tsuihou.Sareta.Shiro.Madoushi.S.Rank.Boukensha.ni.Hirowareru.Kono.Shiro.Madoushi.ga.Kikakugaisugiru.S01 => 被驱逐开勇者派对的白魔导师，被S级冒险者捡到 ～这个白魔导师超规格～ {[tmdbid=284771;type=tv;]}
+#噗妮露是可爱史莱姆 第二季
+(?<=ANi.*?) 噗妮露是可爱史莱姆 第二季 - (1[3-9]|2[0-9]) => 噗妮露是可爱史莱姆 S01E\1
+#定孕成婚
+定孕成婚 / Deki Chau Made Kon => 定孕成婚
+#青春猪头少年不会梦到兔女郎学姐 S02
+Seishun.Buta.Yarou.wa.Santa.Claus.no.Yume.wo.Minai.S01 => 青春猪头少年不会梦到兔女郎学姐 S02
+#租借女友第四季
+#胆大党第二季偏移至第一季
+Dan.Da.Dan.S02E(1[3-9]|2[0-9])(?=.*MWeb) => 胆大党 S01
+#宝可梦 地平线(枫叶字幕组)
+宝可梦 地平线 太乐巴戈斯的光辉 => 宝可梦 地平线(2023)
+宝可梦 地平线 烈空坐飞升 => 宝可梦 地平线(2023)
+宝可梦 地平线 超级电压 => 宝可梦 地平线(2023)
+宝可梦 地平线 再度飞升 => 宝可梦 地平线(2023)
+(.+)\[宠物小精灵(.+?地平线)|(.+)\[寵物小精靈(.+?地平線) => \1{[tmdbid=220150]}\2
+#莉可丽丝：友谊是时间的窃贼 （需使用剧集组订阅，并手动设置起始集数为1）
+Lycoris.Recoil.Friends.are.thieves.of.time => 莉可丽丝 S02 {[tmdbid=154494;type=tv;s=2]}
+#Hana-Doll*
+(?<=ANi.*?) 華 Doll＊ -Reinterpretation of Flowering- => Hana-Doll* {[tmdbid=283361;type=tv]}
+(?<=ANi.*?) 华 Doll＊ -Reinterpretation of Flowering- => Hana-Doll* {[tmdbid=283361;type=tv]}
+#这是妳与我的最后战场，或是开创世界的圣战 第二季
+Kimi to Boku no Saigo no Senjou Aruiwa Sekai ga Hajimaru Seisen => 这是你与我的最后战场，或是开创世界的圣战 {[tmdbid=101972;type=tv]}
+(?<=ANi.*?)这是妳与我的最后战场，或是开创世界的圣战 第二季 -  => 这是你与我的最后战场，或是开创世界的圣战 S02 {[tmdbid=101972;type=tv]}
+(?<=ANi.*?)這是妳與我的最後戰場，或是開創世界的聖戰 第二季 -  => 这是你与我的最后战场，或是开创世界的圣战 S02 {[tmdbid=101972;type=tv]}
+#安妮・雪莉
+(?<=ANi.*?)Anne Shirley / 安妮・雪莉 => 安妮・雪莉 {[tmdbid=277665;type=tv]}
+#打了300年的史莱姆，不知不觉就练到了满级
+(?<=ANi.*?)持续狩猎史莱姆三百年，不知不觉就练到.LV.MAX.第二季 => 打了300年的史莱姆，不知不觉就练到了满级 S02 {[tmdbid=99073;type=tv]}
+#炎炎消防队
+(?<=ANi.*?)炎炎消防队 参之章 -  => 炎炎消防队 S03E {[tmdbid=88046;type=tv]}
+(?<=ANi.*?)炎炎消防隊 參之章 -  => 炎炎消防队 S03E {[tmdbid=88046;type=tv]}
+#搞笑漫画日和
+(?<=ANi.*?)搞笑漫画日和 GO - => 搞笑漫画日和 S05E {[tmdbid=80007;type=tv;s=5]}
+(?<=ANi.*?)搞笑漫畫日和 GO - => 搞笑漫画日和 S05E {[tmdbid=80007;type=tv;s=5]}
+#防风少年
+WIND.BREAKER.S01E(1[3-9]|2[0-9])(?=.*ADWeb) => 防风少年.S02E\1 && S02 <> 2024 >> EP-13
+(?<=ANi.*?)WIND BREAKER—防风少年— Season 2 - (\d+) => 防风少年.S02E\1 && S02 <> 1080 >> EP-13
+(?<=ANi.*?)WIND BREAKER—防風少年— Season 2 - (\d+) => 防风少年.S02E\1 && S02 <> 1080 >> EP-13
+#小市民系列
+(?<=ANi.*?)小市民系列 第二季 => 小市民系列.S01
+Shoushimin.Series.S01E(1[1-9]|2[0-9])(?=.*ADWeb) => 小市民系列.S02E\1 && S02 <> 2024 >> EP-10
+SHOSHIMIN.How.to.Become.Ordinary.S01E(1[1-9]|2[0-9]) => 小市民系列.S02E\1 && S02 <> 2025 >> EP-10
+SHOSHIMIN: How to Become Ordinary S01E(1[1-9]|2[0-9]) => 小市民系列.S02E\1 && S02 <> 2025 >> EP-10
+(?<=MingY.*?)小市民系列 第二季 / Shoushimin Series S2 \[  => 小市民系列.S02 E && E <> 1080 >> EP-10
+#S级怪兽《贝希摩斯》被误认成小猫，成为精灵女孩的骑士(宠物)一起生活
+S-Rank Monster no Behemoth Dakedo Neko to Machigawarete Elf Musume no Pet to Shite Kurashitemasu => S级怪兽《贝希摩斯》被误认成小猫，成为精灵女孩的骑士(宠物)一起生活 {[tmdbid=249545;type=tv]}
+S 級怪獸《貝希摩斯》被誤認成小貓，成為精靈女孩的騎士（寵物）一起生活 => {[tmdbid=249545;type=tv]}
+S 級怪獸《貝希摩斯》被誤認成小貓，成為精靈女孩的騎士（寵物）一起生活 =>  S级怪兽《贝希摩斯》被误认成小猫，成为精灵女孩的骑士(宠物)一起生活{[tmdbid=249545;type=tv]}
+#我独自升级第二季 适配观众
+我獨自升級 第二季 －起於闇影－ => Ore.dake.Level.Up.na.Ken.S01
+我独自升级 第二季 －起于暗影－ => Ore.dake.Level.Up.na.Ken.S01
+我獨自升級 第二季 －起於闇影 => Ore.dake.Level.Up.na.Ken.S01{[tmdbid=127532;type=tv;s=1]}
+我獨自升級 第二季 =>  我独自升级{[tmdbid=127532;type=tv;s=1]}
+(?<=Ore.dake.Level.Up.na.Ken.*?)2025 => 2024
+Ore.dake.Level.Up.na.Ken.Season.2.*Arise.from.the.Shadow.S02 => Ore.dake.Level.Up.na.Ken.S01
+Solo.Leveling.2025.S02(?=.*PTerWEB) => Ore.dake.Level.Up.na.Ken.S01 && S01 <> 1080 >> EP+12
+#无名记忆第二季
+Unnamed Memory Act.2 => 无名记忆 S01
+(?<=Strange-Raw.*?)Unnamed Memory S02 => 无名记忆 S01 && S01 <> Bilibili >> EP+12
+Unnamed.Memory.S02  => 无名记忆 S01 && S01 <> 1080p >> EP+12
+#脱离了A级队伍的我，和从前的徒弟们前往迷宫深处。
+(?<=ANi.*?)离开 A 级队伍的我，和从前的弟子往迷宫深处迈进 => 脱离了A级队伍的我，和从前的徒弟们前往迷宫深处。 {[tmdbid=270487;type=tv]}
+(?<=ANi.*?)離開 A 級隊伍的我，和從前的弟子往迷宮深處邁進 => 脱离了A级队伍的我，和从前的徒弟们前往迷宫深处。 {[tmdbid=270487;type=tv]}
+#药屋少女的呢喃
+Kusuriya.no.Hitorigoto.S02 => Kusuriya no Hitorigoto S01 && S01 <> 2025 >> EP+24
+#蜂蜜柠檬苏打
+(?<=ANi.*?)青春特調蜂蜜檸檬蘇打  => 青春特调蜂蜜柠檬苏打{[tmdbid=247859;type=tv]} 
+(?<=ANi.*?)青春特调蜂蜜柠檬苏打  => 青春特调蜂蜜柠檬苏打{[tmdbid=247859;type=tv]} 
+#欢迎来到日本，精灵小姐。
+(?<=ANi.*?)欢迎来到日本，妖精小姐。 => 欢迎来到日本，精灵小姐。{[tmdbid=249031;type=tv;s=1]}
+(?<=ANi.*?)歡迎來到日本，妖精小姐。 => 欢迎来到日本，精灵小姐。{[tmdbid=249031;type=tv;s=1]}
+#re:从零开始的异世界生活 第三季
+Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S03(?=.*ADWeb) => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01 && S01 <> 2024 >> EP+50
+(?<=ANi.*?)Re：從零開始的異世界生活 第三季 => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01 && S01 <> 1080P >> EP+50
+(?<=ANi.*?)Re：从零开始的异世界生活 第三季 => Re.Zero.kara.Hajimeru.Isekai.Seikatsu.S01 && S01 <> 1080P >> EP+50
+#国漫
+((.+)|)Jade.Dynasty => 诛仙动画{[tmdbid=206484;type=tv]}
+Xtreme.Vanguard => 超限斗神
+Soul.Land.S02 => 斗罗大陆Ⅱ绝世唐门
+## 泛用规则，用于清除多余的别名 ##
+#视频来源修正
+(?i)\bSBSUB\b => 银色子弹字幕组
+(?i)\bNekomoe kisstan\b => 喵萌奶茶屋
+(?i)\bOPFansMaplesnow\b => OPFans枫雪动漫
+(?i)\bSakurato\b|樱都字幕组|桜都字幕组|桜都 => 桜都字幕组
+(?i)\bHaruhana\b => ❀拨雪寻春❀
+(?<=[\W_])CR(?=[\W_]) => Crunchyroll
+(?<=[\W_])NF(?=[\W_]) => Netflix
+(?<=[\W_])AMZN(?=[\W_]) => Amazon
+(?<=[\W_])ATVP(?=[\W_]) => AppleTV+
+(?<=[\W_])DSNP(?=[\W_]) => Disney+
+(?<=(1080p|2160p)\.)Max\. => -MAX.
+(?<=(1080p|2160p)\.)iT\. => -iTunes.
+(?<=S\d{2}E\d{2}).+(?=(2160|1080)p.+NTb) =>  
+#辅助识别修正词
+#(\b[5-9]\b|\b[1-9][0-9]\b) \[ =>  E\1 [
+(?<=[\[【].*?(?:组|組|sub|S(?:UB|ub|tudio)|Raw(?:|s)|社)[\]】])(?:(?:\[|【|★|)\d{1,2}月新番(?:\]|】|★|)|)[\[【](.*?)[\]】] => \1
+^[\W_](.*?(?:组|組|屋|社|動漫|Lab|sub|S(?:UB|ub|tudio)|Raw(?:|s)|Production))[\W_]+(?:[\W_]+\d{1,2}(?:月(?:新|)番|国漫)[\W_]+|)[\[【](.*?)[\]】] => [\1] \2 
+\(([^\(\)\s]+)\)\.(mp4|mkv) => \1
+[【\[](Fin|END)[】\]]|(?:|\s|\s-\s)(Fin|END)(?=\])|(?<=\d{1,2})(Fin|END)
+Hi10p_1080p => 1080p x264
+Ma10p_1080p => 1080p x265
+HEVC Main10P => x265
+(?<=(VCB-Studio|ANi).*?)2nd Season => S02
+(?<=(VCB-Studio|ANi).*?)IV => S04
+(?<=(VCB-Studio|ANi).*?)III => S03
+(?<=(VCB-Studio|ANi).*?)II => S02
+\[CHS\_CHT\_JP\]\(\w{8}\)
+\[CHT\_JP\]\(\w{8}\)
+\[CHS\_JP\]\(\w{8}\)
+chs&jpn => jpsc
+cht&jpn => jptc
+# Extra集 屏蔽词
+\(Extra\d\)
+\(Extra #[0-9]*\)
+#VCB 钢之炼金术师 FA（TMDB 31911）
+Fullmetal Alchemist. Brotherhood => 钢之炼金术师 FA{[tmdbid=31911;type=tv;s=1]}
+#VCB 樱Trick（TMDB 61462）
+\[DMG&Hakugetsu&VCB-S\]\[Sakura Trick\] => 樱Trick{[tmdbid=61462;type=tv;s=1]}
+#VCB 结城友奈是勇者 鹫尾须美之章 剧场版三部（TMDB 428293/450150/461761）
+YuYuYu - Movie \[01\] => 结城友奈是勇者鹫尾须美之章第1章朋友{[tmdbid=428293;type=movie]}
+YuYuYu - Movie \[02\] => 结城友奈是勇者鹫尾须美之章第2章魂{[tmdbid=450150;type=movie]}
+YuYuYu - Movie \[03\] => 结城友奈是勇者鹫尾须美之章第3章约定{[tmdbid=461761;type=movie]}
+#VCB 结城友奈是勇者 S1（TMDB 71493）
+YuYuYu - Yuuki Yuuna no Shou => 结城友奈是勇者{[tmdbid=71493;type=tv;s=1]}
+#VCB 结城友奈是勇者 鹫尾须美之章 TV 版 → S02E01-06
+YuYuYu - Washio Sumi no Shou \[(\d{2})\] => 结城友奈是勇者{[tmdbid=71493;type=tv;s=2]}.S02E\1
+#VCB 结城友奈是勇者 勇者之章 → S02E07-12（+6 偏移）
+YuYuYu - Yuusha no Shou \[(\d{2})\] => 结城友奈是勇者{[tmdbid=71493;type=tv;s=2]}.S02E\1 && S02E <> \[1080p\] >> EP+6
+#VCB 堤亚穆帝国物语（TMDB 209604）
+Tearmoon Teikoku Monogatari => 堤亚穆帝国物语{[tmdbid=209604;type=tv;s=1]}
+#VCB 打了300年的史莱姆（TMDB 99073）
+Slime 300 \[(\d{2})\] => 打了三百年的史莱姆{[tmdbid=99073;type=tv;s=1]}.S01E\1
+#VCB 我的妹妹哪有这么可爱 S2（TMDB 56353，仅 1-13 集）
+Ore No Imoto S02 \[(\d{2})\] => 我的妹妹哪有这么可爱{[tmdbid=56353;type=tv;s=2]}.S02E\1
+#VCB 动画同好会（TMDB 74080）
+Anime-Gataris => 动画同好会{[tmdbid=74080;type=tv;s=1]}
+#VCB 君主·埃尔梅罗二世事件簿（TMDB 85368）
+Lord El-Melloi S02-sei no Jikenbo Rail Zeppelin Grace Note => 君主埃尔梅罗二世事件簿{[tmdbid=85368;type=tv;s=1]}
+#VCB S级怪兽贝希摩斯（TMDB 249545）
+S Rank Musume => S级怪兽贝希摩斯{[tmdbid=249545;type=tv;s=1]}
+#VCB 弱势角色友崎君 2nd Stage（TMDB 99083）
+Jaku-Chara Tomozaki-kun 2nd Stage => 弱势角色友崎君{[tmdbid=99083;type=tv;s=2]}
+#VCB 我要【招架】一切（TMDB 238892）
+Ore wa Subete o 【Parry】 Suru => 我要招架一切{[tmdbid=238892;type=tv;s=1]}
+#VCB 话术士（TMDB 258580）
+Wajutsushi => 依靠话术士的我统领世界最强氏族{[tmdbid=258580;type=tv;s=1]}
+#VCB 大叔新人冒险者（TMDB 250598）
+Shinmai Ossan Boukensha => 大叔新人冒险者{[tmdbid=250598;type=tv;s=1]}
+#VCB 少女们向荒野进发（TMDB 65661）
+Shoujo-tachi wa Kouya o Mezasu => 少女们向荒野进发{[tmdbid=65661;type=tv;s=1]}
+#VCB 我不是说了能力要平均值吗（TMDB 91547）
+Heikinchi => 我不是说了能力要平均值吗{[tmdbid=91547;type=tv;s=1]}
+#VCB 棺姬嘉依卡 AVENGING BATTLE（TMDB 60825 S02）
+Hitsugi no Chaika Avenging Battle => 棺姬嘉依卡{[tmdbid=60825;type=tv;s=2]}
+#VCB 这样算是僵尸吗？Of the Dead（TMDB 38420 S02）
+Kore wa Zombie Desuka？ Of the Dead => 这样算是僵尸吗{[tmdbid=38420;type=tv;s=2]}
+#VCB 尼尔自动人形（TMDB 158373）
+NieR Automata Ver1\.1a => 尼尔自动人形{[tmdbid=158373;type=tv;s=1]}
+#VCB 刀剑神域进击篇 无星之夜（TMDB 761898 电影）
+Sword Art Online Progressive - Hoshinaki Yoru no Aria => 刀剑神域进击篇无星之夜{[tmdbid=761898;type=movie]}
+#VCB 间谍过家家 代号白（TMDB 1062807 电影）
+Gekijouban SPYxFAMILY Code：White => 间谍过家家代号白{[tmdbid=1062807;type=movie]}
+#VCB 咒术回战 0（TMDB 810693 电影）
+Gekijouban Jujutsu Kaisen 0 => 咒术回战零{[tmdbid=810693;type=movie]}
+#VCB 青春猪头少年不会梦到娇怜外出妹（TMDB 1056803 电影）
+Seishun Buta Yarou wa Odekake Sister no Yume o Minai => 青春猪头少年不会梦到娇怜外出妹{[tmdbid=1056803;type=movie]}
+#三国演义 (1994) 去除集标题，绑定 TMDB 72645
+三国演义 S1E(\d{1,3})[^\s(（]+ => 三国演义{[tmdbid=72645;type=tv;s=1]} S01E\1
+#ANi 如果这叫爱感觉会很恶心（台译）→ 为了女儿，我说不定连魔王都能干掉（TMDB 88804）
+如果這叫愛情感覺會很噁心 => 为了女儿我说不定连魔王都能干掉{[tmdbid=88804;type=tv;s=1]}
+#ANi 乱世千金倪亚（TMDB 312850）
+亂世千金倪亞．利斯頓轉生為嬌弱千金的弒神武人華麗無雙錄 => 乱世千金倪亚{[tmdbid=312850;type=tv;s=1]}
+#ANi 战斗之魂[Re] 绝界之空（TMDB 316551）
+Battle Spirits 絕界之空 \[(\d+)\] - Re => 战斗之魂绝界之空{[tmdbid=316551;type=tv;s=1]}.S01E\1
+#VCB 摇曳露营 剧场版（TMDB 566466 电影）
+Yuru Camp Movie => 摇曳露营剧场版{[tmdbid=566466;type=movie]}
