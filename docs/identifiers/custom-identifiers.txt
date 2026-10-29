@@ -536,8 +536,8 @@ Gekijouban Jujutsu Kaisen 0 => 咒术回战零{[tmdbid=810693;type=movie]}
 Seishun Buta Yarou wa Odekake Sister no Yume o Minai => 青春猪头少年不会梦到娇怜外出妹{[tmdbid=1056803;type=movie]}
 #三国演义 (1994) 去除集标题，绑定 TMDB 72645
 三国演义 S1E(\d{1,3})[^\s(（]+ => 三国演义{[tmdbid=72645;type=tv;s=1]} S01E\1
-#ANi 如果这叫爱感觉会很恶心（台译）→ 为了女儿，我说不定连魔王都能干掉（TMDB 88804）
-如果這叫愛情感覺會很噁心 => 为了女儿我说不定连魔王都能干掉{[tmdbid=88804;type=tv;s=1]}
+#ANi 如果這叫愛情感覺會很噁心（台译，2021）→ 这爱情有点奇怪（TMDB 98309）
+如果這叫愛情感覺會很噁心 => 这爱情有点奇怪{[tmdbid=98309;type=tv;s=1]}
 #ANi 乱世千金倪亚（TMDB 312850）
 亂世千金倪亞．利斯頓轉生為嬌弱千金的弒神武人華麗無雙錄 => 乱世千金倪亚{[tmdbid=312850;type=tv;s=1]}
 #ANi 战斗之魂[Re] 绝界之空（TMDB 316551）
